@@ -309,8 +309,16 @@ describe("install — claude-code --remote (cloud/ephemeral containers)", () => 
     expect(script).toContain(".agentic-feedback/patterns.json");
   });
 
-  it("creates stop-remote.sh that exports and pushes patterns", async () => {
+  it("creates stop-worktree.sh that exports patterns (no git push)", async () => {
     await install({ cwd: dir, remote: true });
+    const script = await readFile(join(dir, ".claude", "hooks", "stop-worktree.sh"), "utf8");
+    expect(script).toContain("agentic-feedback learn");
+    expect(script).toContain("agentic-feedback export");
+    expect(script).not.toContain("git push");
+  });
+
+  it("--push creates stop-remote.sh with git commit and push", async () => {
+    await install({ cwd: dir, push: true });
     const script = await readFile(join(dir, ".claude", "hooks", "stop-remote.sh"), "utf8");
     expect(script).toContain("agentic-feedback learn");
     expect(script).toContain("agentic-feedback export");
@@ -323,6 +331,11 @@ describe("install — claude-code --remote (cloud/ephemeral containers)", () => 
     expect(await isExecutable(join(dir, ".claude", "hooks", "session-start.sh"))).toBe(true);
   });
 
+  it("stop-worktree.sh is executable", async () => {
+    await install({ cwd: dir, remote: true });
+    expect(await isExecutable(join(dir, ".claude", "hooks", "stop-worktree.sh"))).toBe(true);
+  });
+
   it("wires SessionStart hook in settings.json", async () => {
     await install({ cwd: dir, remote: true });
     const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
@@ -330,8 +343,18 @@ describe("install — claude-code --remote (cloud/ephemeral containers)", () => 
     expect(settings.hooks).toHaveProperty("SessionStart");
   });
 
-  it("Stop hook in settings.json points to stop-remote.sh", async () => {
+  it("Stop hook in settings.json points to stop-worktree.sh for --remote", async () => {
     await install({ cwd: dir, remote: true });
+    const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
+    const settings = JSON.parse(raw) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const stopCmd = settings.hooks.Stop[0]?.hooks[0]?.command ?? "";
+    expect(stopCmd).toContain("stop-worktree.sh");
+  });
+
+  it("Stop hook in settings.json points to stop-remote.sh for --push", async () => {
+    await install({ cwd: dir, push: true });
     const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
     const settings = JSON.parse(raw) as {
       hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
@@ -346,8 +369,15 @@ describe("install — claude-code --remote (cloud/ephemeral containers)", () => 
     expect(existsSync(join(dir, ".claude", "hooks", "session-start.sh"))).toBe(false);
   });
 
-  it("dry-run with --remote reports session-start and stop-remote scripts", async () => {
+  it("dry-run with --remote reports session-start and stop-worktree scripts", async () => {
     const result = await install({ cwd: dir, remote: true, dryRun: true });
+    const names = result.filesWritten.map((f) => f.split("/").pop());
+    expect(names).toContain("session-start.sh");
+    expect(names).toContain("stop-worktree.sh");
+  });
+
+  it("dry-run with --push reports session-start and stop-remote scripts", async () => {
+    const result = await install({ cwd: dir, push: true, dryRun: true });
     const names = result.filesWritten.map((f) => f.split("/").pop());
     expect(names).toContain("session-start.sh");
     expect(names).toContain("stop-remote.sh");

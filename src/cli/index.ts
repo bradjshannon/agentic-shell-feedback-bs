@@ -21,7 +21,8 @@ Commands:
   install           Install hooks for your coding agent
                     Options: --agent claude-code|cursor|cline|openhands|copilot|generic (default: claude-code)
                              --global  Install to home directory instead of current project
-                             --remote  Add SessionStart + remote-aware Stop hooks for ephemeral cloud containers
+                             --remote  Add SessionStart + Stop hooks that persist patterns via worktree file
+                             --push    With --remote: also git commit + push patterns (for truly ephemeral containers)
                              --dry-run Show what would be created without writing files
 
 Options:
@@ -35,7 +36,8 @@ Examples:
   agentic-feedback report
   agentic-feedback install
   agentic-feedback install --agent cursor
-  agentic-feedback install --remote          # cloud/ephemeral containers
+  agentic-feedback install --remote          # Cowork / WSL / local VM worktrees
+  agentic-feedback install --remote --push   # cloud/ephemeral containers (fresh clone each session)
   agentic-feedback install --global --dry-run
 `.trim();
 
@@ -229,6 +231,7 @@ async function cmdInstall(
     agent: (agentFlag as AgentTarget) ?? "claude-code",
     global: flags["--global"] === true,
     remote: flags["--remote"] === true,
+    push: flags["--push"] === true,
     dryRun: flags["--dry-run"] === true,
     cwd: process.cwd(),
   });
@@ -252,9 +255,14 @@ async function cmdInstall(
     console.log(`\nInstalled agentic-feedback hooks for ${result.agent}.`);
     if (result.agent === "claude-code") {
       console.log("Verify with /hooks inside a Claude Code session.");
-      if (flags["--remote"]) {
-        console.log("Remote mode: SessionStart will install agentic-feedback and seed patterns each session.");
-        console.log("Commit .agentic-feedback/patterns.json to your repo so patterns persist across sessions.");
+      if (flags["--remote"] || flags["--push"]) {
+        console.log("SessionStart will install agentic-feedback and seed patterns each session.");
+        if (flags["--push"]) {
+          console.log("Stop hook will export, commit, and push patterns back to the repo.");
+        } else {
+          console.log("Stop hook will export patterns to .agentic-feedback/patterns.json in the worktree.");
+          console.log("Add --push if the container starts from a fresh clone each session.");
+        }
       }
       console.log("Note: VS Code Copilot agent mode uses the same hooks format — no extra install needed.");
     }

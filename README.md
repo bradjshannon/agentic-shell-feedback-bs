@@ -22,8 +22,11 @@ npm install -g agentic-feedback
 # Claude Code (default) — also covers VS Code Copilot agent mode
 agentic-feedback install
 
-# Cloud / ephemeral containers (Claude Code cloud, GitHub Actions, etc.)
+# Local VM worktree (Cowork, WSL2, Lima, dev containers with persistent worktree)
 agentic-feedback install --remote
+
+# Truly ephemeral containers (fresh clone each session: cloud runners, GitHub Actions)
+agentic-feedback install --remote --push
 
 # Other agents
 agentic-feedback install --agent cursor
@@ -322,14 +325,16 @@ const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
 
 You can install for multiple agents in the same project — each uses a separate config directory and they never conflict. All agents share a single pattern store, so learned failures protect every agent automatically.
 
-| Agent | Config location | Conflicts with others? |
-|-------|----------------|------------------------|
-| `claude-code` | `.claude/` | No |
-| `cursor` | `.cursor/` | No |
-| `cline` | `.clinerules/` | No |
-| `openhands` | `.openhands/` | No |
-| `copilot` | `.github/hooks/` | No |
-| `generic` | `bin/` | No |
+| Agent | Command | Config location | Conflicts with others? |
+|-------|---------|----------------|------------------------|
+| `claude-code` (local) | `install` | `.claude/` | No |
+| `claude-code` (Cowork/WSL) | `install --remote` | `.claude/` | No |
+| `claude-code` (cloud/CI) | `install --remote --push` | `.claude/` | No |
+| `cursor` | `install --agent cursor` | `.cursor/` | No |
+| `cline` | `install --agent cline` | `.clinerules/` | No |
+| `openhands` | `install --agent openhands` | `.openhands/` | No |
+| `copilot` cloud agent | `install --agent copilot` | `.github/hooks/` | No |
+| `generic` | `install --agent generic` | `bin/` | No |
 
 Repeated installs for the same agent are also safe — settings files are merged and scripts are overwritten in place, so nothing accumulates.
 
@@ -356,19 +361,37 @@ Claude should see the block and self-correct to a safe alternative.
 
 ---
 
-### Remote and cloud agents (Claude Code cloud, GitHub Actions, any ephemeral container)
+### Remote, cloud, and sandboxed agents
 
-Any agent running in an ephemeral container (cloud-hosted Claude Code sessions, CI runners, hosted dev environments) has a fresh filesystem each session. The `--remote` flag adds two extra hooks that solve this:
+The challenge with any non-local agent is that `~/.agentic-feedback/` may not persist between sessions. There are two distinct scenarios with different solutions.
+
+#### Cowork, WSL2, Lima, dev containers (local VM with persistent worktree)
+
+Claude Cowork runs in a sandboxed local VM (WSL2 on Windows, Lima on macOS) with a local worktree — your project files are mounted directly, not cloned fresh. The VM home directory is persistent across sessions, so `~/.agentic-feedback/` survives restarts. **Standard `install` already works.** 
+
+For extra resilience (in case the VM itself gets reset), add `--remote` to also export patterns into the worktree after each session:
 
 ```bash
 agentic-feedback install --remote
 ```
 
-Creates, in addition to the standard hooks:
-- `.claude/hooks/session-start.sh` — wired to `SessionStart`; installs `agentic-feedback` if absent, then seeds the pattern registry from `.agentic-feedback/patterns.json` in the repo
-- `.claude/hooks/stop-remote.sh` — replaces the standard `Stop` hook; runs `learn`, exports patterns to `.agentic-feedback/patterns.json`, then commits and pushes back to the repo
+This adds:
+- `.claude/hooks/session-start.sh` — seeds the registry from `.agentic-feedback/patterns.json` in the worktree at session start
+- `.claude/hooks/stop-worktree.sh` — exports learned patterns to `.agentic-feedback/patterns.json` at session end (no git commit)
 
-**One-time setup:** commit an initial (empty) patterns file so the import always succeeds:
+Because the worktree is local, the file persists naturally without any git operations.
+
+#### Truly ephemeral containers (Claude Code cloud, GitHub Actions, fresh clone each session)
+
+When the agent starts from a fresh repo clone each session (cloud runners, CI, hosted cloud sessions), the home dir is wiped and the worktree is new. Use `--remote --push`:
+
+```bash
+agentic-feedback install --remote --push
+```
+
+This adds the same `session-start.sh` (seeds from the file), but the `Stop` hook (`stop-remote.sh`) also commits and pushes `.agentic-feedback/patterns.json` back to the repo so it's available on the next fresh clone.
+
+**One-time setup:** commit an initial patterns file so the first import succeeds:
 
 ```bash
 mkdir -p .agentic-feedback
@@ -377,9 +400,13 @@ git add .agentic-feedback/patterns.json
 git commit -m "chore: seed agentic-feedback pattern registry"
 ```
 
-From that point on, the `Stop` hook keeps the file current. Failure patterns accumulate in the repo and are available to every agent and every developer who clones it.
+From that point on, the Stop hook keeps the file current and pushes it automatically.
 
-**This works for any LLM agent running in an ephemeral container** — Claude Code cloud sessions, GitHub Actions jobs, Codespaces, Gitpod, Modal, Railway, or any hosted runner — as long as the agent supports `SessionStart` and `Stop` lifecycle hooks and has git push access to the repo.
+| Scenario | Command | Stop hook behaviour |
+|----------|---------|---------------------|
+| Local dev (default) | `install` | `agentic-feedback learn` |
+| Cowork / WSL2 / Lima | `install --remote` | export to worktree file |
+| Cloud / CI / fresh clone | `install --remote --push` | export → git commit → git push |
 
 ---
 

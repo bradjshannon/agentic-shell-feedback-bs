@@ -9,7 +9,11 @@ export interface InstallOptions {
   agent?: AgentTarget;
   global?: boolean;
   dryRun?: boolean;
+  /** Add SessionStart + Stop hooks that persist patterns via the worktree file. */
   remote?: boolean;
+  /** Also commit and push patterns at session end. Only needed for truly ephemeral
+   *  containers (cloud runners that start from a fresh clone). Implies remote. */
+  push?: boolean;
   cwd?: string;
 }
 
@@ -74,10 +78,27 @@ fi
 exit 0
 `;
 
+// Used when --remote is set WITHOUT --push.
+// Exports patterns to the worktree file; no git commit.
+// Works for Cowork (WSL2/Lima local VM) and any setup where the worktree persists.
+const STOP_WORKTREE_SH = `#!/bin/bash
+# agentic-feedback stop hook — exports learned patterns to the worktree.
+# The file persists naturally when the worktree is local (Cowork, WSL, dev containers).
+
+agentic-feedback learn
+
+mkdir -p .agentic-feedback
+agentic-feedback export > .agentic-feedback/patterns.json
+
+exit 0
+`;
+
+// Used when --remote --push is set.
+// Same as above but also commits and pushes so patterns survive ephemeral containers
+// that start from a fresh clone each session (cloud runners, GitHub Actions, etc.).
 const STOP_REMOTE_SH = `#!/bin/bash
-# agentic-feedback stop hook (remote) — runs when a cloud session ends.
-# Learns from the session, exports patterns, and pushes them back to the repo
-# so they persist across ephemeral container restarts.
+# agentic-feedback stop hook (cloud) — exports patterns and pushes to repo.
+# Use this for ephemeral containers that start from a fresh clone each session.
 
 agentic-feedback learn
 
@@ -139,7 +160,8 @@ const CLAUDE_SETTINGS_HOOKS_GLOBAL = {
   },
 };
 
-function makeClaudeSettingsRemoteAdditions(base: string): unknown {
+function makeClaudeSettingsRemoteAdditions(base: string, usePush: boolean): unknown {
+  const stopScript = usePush ? `${base}/hooks/stop-remote.sh` : `${base}/hooks/stop-worktree.sh`;
   return {
     hooks: {
       SessionStart: [
@@ -148,11 +170,10 @@ function makeClaudeSettingsRemoteAdditions(base: string): unknown {
           hooks: [{ type: "command", command: `${base}/hooks/session-start.sh` }],
         },
       ],
-      // Replace the simple Stop hook with the remote-aware version.
       Stop: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: `${base}/hooks/stop-remote.sh` }],
+          hooks: [{ type: "command", command: stopScript }],
         },
       ],
     },
@@ -401,10 +422,13 @@ async function installClaudeCode(
   const hookConfig = isGlobal ? CLAUDE_SETTINGS_HOOKS_GLOBAL : CLAUDE_SETTINGS_HOOKS;
   await patchSettings(settingsPath, hookConfig, options, result);
 
-  if (options.remote) {
+  if (options.remote ?? options.push) {
+    const usePush = options.push ?? false;
+    const stopScript = usePush ? STOP_REMOTE_SH : STOP_WORKTREE_SH;
+    const stopFilename = usePush ? "stop-remote.sh" : "stop-worktree.sh";
     await writeScript(join(hooksDir, "session-start.sh"), SESSION_START_SH, options, result);
-    await writeScript(join(hooksDir, "stop-remote.sh"), STOP_REMOTE_SH, options, result);
-    const remoteAdditions = makeClaudeSettingsRemoteAdditions(base);
+    await writeScript(join(hooksDir, stopFilename), stopScript, options, result);
+    const remoteAdditions = makeClaudeSettingsRemoteAdditions(base, usePush);
     await patchSettings(settingsPath, remoteAdditions, options, result);
   }
 }
