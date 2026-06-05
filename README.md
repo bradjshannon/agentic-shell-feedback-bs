@@ -54,43 +54,14 @@ Everything is configured at runtime in the interactive terminal UI. Use arrow ke
 
 ---
 
-## Install Hooks — Options
-
-When you open **Install Hooks** in the TUI, you choose an agent and a set of flags. Here's what each does:
-
-### Agent
-
-| Agent | Config written to | Notes |
-|-------|------------------|-------|
-| `claude-code` | `.claude/` | Default. Also covers VS Code Copilot agent mode. |
-| `cursor` | `.cursor/` | Requires Cursor v1.7+ |
-| `cline` | `.clinerules/` | macOS/Linux only, Cline v3.36+ |
-| `openhands` | `.openhands/` | Same hook format as Claude Code |
-| `copilot` | `.github/hooks/` | GitHub Copilot cloud coding agent (not VS Code) |
-| `generic` | `bin/` | Shell wrapper for Aider, SWE-agent, etc. |
-
-Installing multiple agents in the same project is safe — each writes to a separate directory and they never conflict. All agents share one pattern store, so failures learned by one protect all others.
-
-### Flags
-
-| Flag | When to use |
-|------|------------|
-| _(none)_ | Local development. Patterns persist in `~/.agentic-feedback/`. |
-| `--global` | Install to home directory so hooks apply across all your projects. |
-| `--remote` | Local VM / Cowork / WSL2 / Lima. Exports patterns to a worktree file at session end for resilience. |
-| `--remote --push` | Truly ephemeral containers (cloud runners, GitHub Actions, fresh clone each session). Stop hook also commits and pushes patterns back to the repo. |
-| `--dry-run` | Preview what would be created without writing any files. |
-
-**Pattern privacy:** `--remote` alone never commits anything. The worktree export path is automatically added to `.gitignore`. `--push` is an explicit opt-in — use it only when you want patterns to persist across fresh clones.
-
-**Ephemeral container one-time setup:** if you use `--remote --push`, commit an initial patterns file so the first session has something to import:
-
-```bash
-mkdir -p .agentic-feedback
-echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
-git add .agentic-feedback/patterns.json
-git commit -m "chore: seed agentic-feedback pattern registry"
-```
+> **Note — ephemeral containers:** if you select `--remote --push` in the TUI (for cloud runners or GitHub Actions where the repo is cloned fresh each session), commit a seed file once so the first import has something to read:
+>
+> ```bash
+> mkdir -p .agentic-feedback
+> echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
+> git add .agentic-feedback/patterns.json
+> git commit -m "chore: seed agentic-feedback pattern registry"
+> ```
 
 ---
 
