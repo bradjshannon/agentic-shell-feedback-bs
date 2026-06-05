@@ -2,6 +2,7 @@
 import { LearningLoop } from "../LearningLoop.js";
 import { computeMetrics } from "../eval/Metrics.js";
 import { install } from "../installer/index.js";
+import { runTui } from "../tui/index.js";
 import type { AnalyzerHints } from "../gates/CommandAnalyzer.js";
 import type { AgentTarget } from "../installer/index.js";
 
@@ -18,6 +19,7 @@ Commands:
   report            Print registry summary and metrics
   export            Export registry as JSON (stdout)
   import            Import patterns from JSON file (read from stdin)
+  tui               Launch interactive TUI (default when no command given)
   install           Install hooks for your coding agent
                     Options: --agent claude-code|cursor|cline|openhands|copilot|generic (default: claude-code)
                              --global  Install to home directory instead of current project
@@ -44,16 +46,21 @@ Examples:
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  if (args.length === 0) {
+    await runTui();
+    return;
+  }
+
+  if (args.includes("--help") || args.includes("-h")) {
     console.log(USAGE);
     process.exit(0);
   }
 
   const [command, ...rest] = args;
   const flags = parseFlags(rest);
-  const storageDir = flags["--dir"] as string | undefined;
-
-  const loop = new LearningLoop({ storageDir });
+  const dirFlag = flags["--dir"];
+  const loopConfig = typeof dirFlag === "string" ? { storageDir: dirFlag } : {};
+  const loop = new LearningLoop(loopConfig);
 
   try {
     switch (command) {
@@ -78,6 +85,9 @@ async function main(): Promise<void> {
       case "install":
         await cmdInstall(rest, flags);
         break;
+      case "tui":
+        await runTui();
+        break;
       default:
         console.error(`Unknown command: ${command}\n`);
         console.log(USAGE);
@@ -100,9 +110,12 @@ async function cmdPreflight(
   }
 
   const hints: AnalyzerHints = {};
-  if (flags["--shell"]) hints.shell = flags["--shell"] as AnalyzerHints["shell"];
-  if (flags["--target"]) hints.target = flags["--target"] as AnalyzerHints["target"];
-  if (flags["--os"]) hints.os = flags["--os"] as AnalyzerHints["os"];
+  const shellFlag = flags["--shell"];
+  const targetFlag = flags["--target"];
+  const osFlag = flags["--os"];
+  if (typeof shellFlag === "string") hints.shell = shellFlag as NonNullable<AnalyzerHints["shell"]>;
+  if (typeof targetFlag === "string") hints.target = targetFlag as NonNullable<AnalyzerHints["target"]>;
+  if (typeof osFlag === "string") hints.os = osFlag as NonNullable<AnalyzerHints["os"]>;
 
   const result = await loop.preflight(cmdArg, hints);
 
