@@ -6,11 +6,17 @@
 
 ## What is this?
 
-AI coding assistants like Claude, Cursor, and Copilot make the same mistakes over and over. They'll try a command that doesn't work, get an error, and then try the exact same thing again in the next session — because they have no memory of what failed before.
+AI coding assistants like Claude, Cursor, and Copilot make the same mistakes over and over. They'll try a command that doesn't work, get an error, and then try the exact same thing in the next session — because they have no memory of what failed before.
 
-This tool gives them that memory. Every time an AI assistant runs a shell command, agentic-feedback watches what happens. When something fails, it records the failure. After a pattern repeats itself, agentic-feedback starts blocking that command automatically — before the AI can waste your time on it again. It also suggests what to do instead.
+This tool gives them that memory. Every time an AI assistant runs a shell command, agentic-feedback watches what happens. When something fails, it gets recorded. The rules are simple:
 
-No configuration required. No sharing of data. Everything it learns stays on your machine.
+- A failure happens **twice within 30 days** → that command is automatically blocked from then on
+- A failure **wastes more than 60 seconds** → blocked immediately
+- A command causes **no problems for 90 days** → the block is lifted
+
+When a command is blocked, the AI is told what to do instead — so it self-corrects without you having to intervene.
+
+Everything it learns stays on your machine.
 
 ---
 
@@ -62,17 +68,6 @@ Everything is configured at runtime in the interactive terminal UI. Use arrow ke
 | **Run Learn** | Promote advisory patterns to blocking based on failure history. |
 | **Export Patterns** | Save the registry to a JSON file (or stdout). |
 | **Import Patterns** | Merge patterns from a JSON file into the registry. |
-
----
-
-> **Note — ephemeral containers:** if you select `--remote --push` in the TUI (for cloud runners or GitHub Actions where the container starts fresh each session), commit a seed file once so the first import has something to read:
->
-> ```bash
-> mkdir -p .agentic-feedback
-> echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
-> git add .agentic-feedback/patterns.json
-> git commit -m "chore: seed agentic-feedback pattern registry"
-> ```
 
 ---
 
