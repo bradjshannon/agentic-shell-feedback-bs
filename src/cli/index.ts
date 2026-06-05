@@ -21,6 +21,7 @@ Commands:
   install           Install hooks for your coding agent
                     Options: --agent claude-code|cursor|cline|openhands|copilot|generic (default: claude-code)
                              --global  Install to home directory instead of current project
+                             --remote  Add SessionStart + remote-aware Stop hooks for ephemeral cloud containers
                              --dry-run Show what would be created without writing files
 
 Options:
@@ -34,6 +35,7 @@ Examples:
   agentic-feedback report
   agentic-feedback install
   agentic-feedback install --agent cursor
+  agentic-feedback install --remote          # cloud/ephemeral containers
   agentic-feedback install --global --dry-run
 `.trim();
 
@@ -226,6 +228,7 @@ async function cmdInstall(
   const result = await install({
     agent: (agentFlag as AgentTarget) ?? "claude-code",
     global: flags["--global"] === true,
+    remote: flags["--remote"] === true,
     dryRun: flags["--dry-run"] === true,
     cwd: process.cwd(),
   });
@@ -249,6 +252,10 @@ async function cmdInstall(
     console.log(`\nInstalled agentic-feedback hooks for ${result.agent}.`);
     if (result.agent === "claude-code") {
       console.log("Verify with /hooks inside a Claude Code session.");
+      if (flags["--remote"]) {
+        console.log("Remote mode: SessionStart will install agentic-feedback and seed patterns each session.");
+        console.log("Commit .agentic-feedback/patterns.json to your repo so patterns persist across sessions.");
+      }
       console.log("Note: VS Code Copilot agent mode uses the same hooks format — no extra install needed.");
     }
     if (result.agent === "copilot") {

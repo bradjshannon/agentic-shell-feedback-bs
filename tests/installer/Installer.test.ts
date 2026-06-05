@@ -290,6 +290,70 @@ describe("install — generic", () => {
   });
 });
 
+describe("install — claude-code --remote (cloud/ephemeral containers)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("creates session-start.sh that installs and seeds patterns", async () => {
+    await install({ cwd: dir, remote: true });
+    const script = await readFile(join(dir, ".claude", "hooks", "session-start.sh"), "utf8");
+    expect(script).toContain("npm install -g agentic-feedback");
+    expect(script).toContain("agentic-feedback import");
+    expect(script).toContain(".agentic-feedback/patterns.json");
+  });
+
+  it("creates stop-remote.sh that exports and pushes patterns", async () => {
+    await install({ cwd: dir, remote: true });
+    const script = await readFile(join(dir, ".claude", "hooks", "stop-remote.sh"), "utf8");
+    expect(script).toContain("agentic-feedback learn");
+    expect(script).toContain("agentic-feedback export");
+    expect(script).toContain("git commit");
+    expect(script).toContain("git push");
+  });
+
+  it("session-start.sh is executable", async () => {
+    await install({ cwd: dir, remote: true });
+    expect(await isExecutable(join(dir, ".claude", "hooks", "session-start.sh"))).toBe(true);
+  });
+
+  it("wires SessionStart hook in settings.json", async () => {
+    await install({ cwd: dir, remote: true });
+    const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
+    const settings = JSON.parse(raw) as { hooks: Record<string, unknown[]> };
+    expect(settings.hooks).toHaveProperty("SessionStart");
+  });
+
+  it("Stop hook in settings.json points to stop-remote.sh", async () => {
+    await install({ cwd: dir, remote: true });
+    const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
+    const settings = JSON.parse(raw) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const stopCmd = settings.hooks.Stop[0]?.hooks[0]?.command ?? "";
+    expect(stopCmd).toContain("stop-remote.sh");
+  });
+
+  it("non-remote install does not create session-start.sh", async () => {
+    await install({ cwd: dir });
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".claude", "hooks", "session-start.sh"))).toBe(false);
+  });
+
+  it("dry-run with --remote reports session-start and stop-remote scripts", async () => {
+    const result = await install({ cwd: dir, remote: true, dryRun: true });
+    const names = result.filesWritten.map((f) => f.split("/").pop());
+    expect(names).toContain("session-start.sh");
+    expect(names).toContain("stop-remote.sh");
+  });
+});
+
 describe("multi-agent co-installation", () => {
   let dir: string;
 

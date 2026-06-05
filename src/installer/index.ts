@@ -9,6 +9,7 @@ export interface InstallOptions {
   agent?: AgentTarget;
   global?: boolean;
   dryRun?: boolean;
+  remote?: boolean;
   cwd?: string;
 }
 
@@ -51,6 +52,43 @@ OUTCOME="success"
 
 echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":0}" \\
   | agentic-feedback record
+
+exit 0
+`;
+
+// Remote-mode additions: SessionStart seeds the registry from the repo;
+// stop-remote.sh exports learned patterns and pushes them back so they
+// survive ephemeral container restarts (cloud sessions, GitHub Actions, etc.).
+
+const SESSION_START_SH = `#!/bin/bash
+# agentic-feedback session-start hook — runs at the start of each cloud session.
+
+# Install agentic-feedback if not present in this container.
+which agentic-feedback >/dev/null 2>&1 || npm install -g agentic-feedback 2>/dev/null
+
+# Seed the pattern registry from the committed patterns file.
+if [ -f ".agentic-feedback/patterns.json" ]; then
+  agentic-feedback import < .agentic-feedback/patterns.json
+fi
+
+exit 0
+`;
+
+const STOP_REMOTE_SH = `#!/bin/bash
+# agentic-feedback stop hook (remote) — runs when a cloud session ends.
+# Learns from the session, exports patterns, and pushes them back to the repo
+# so they persist across ephemeral container restarts.
+
+agentic-feedback learn
+
+mkdir -p .agentic-feedback
+agentic-feedback export > .agentic-feedback/patterns.json
+
+git add .agentic-feedback/patterns.json 2>/dev/null
+if ! git diff --staged --quiet 2>/dev/null; then
+  git commit -m "chore: update agentic-feedback patterns [skip ci]" 2>/dev/null
+  git push 2>/dev/null || true
+fi
 
 exit 0
 `;
@@ -100,6 +138,26 @@ const CLAUDE_SETTINGS_HOOKS_GLOBAL = {
     ],
   },
 };
+
+function makeClaudeSettingsRemoteAdditions(base: string): unknown {
+  return {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: `${base}/hooks/session-start.sh` }],
+        },
+      ],
+      // Replace the simple Stop hook with the remote-aware version.
+      Stop: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: `${base}/hooks/stop-remote.sh` }],
+        },
+      ],
+    },
+  };
+}
 
 // ─── Cursor hooks template ─────────────────────────────────────────────────
 
@@ -342,6 +400,13 @@ async function installClaudeCode(
 
   const hookConfig = isGlobal ? CLAUDE_SETTINGS_HOOKS_GLOBAL : CLAUDE_SETTINGS_HOOKS;
   await patchSettings(settingsPath, hookConfig, options, result);
+
+  if (options.remote) {
+    await writeScript(join(hooksDir, "session-start.sh"), SESSION_START_SH, options, result);
+    await writeScript(join(hooksDir, "stop-remote.sh"), STOP_REMOTE_SH, options, result);
+    const remoteAdditions = makeClaudeSettingsRemoteAdditions(base);
+    await patchSettings(settingsPath, remoteAdditions, options, result);
+  }
 }
 
 async function installCursor(

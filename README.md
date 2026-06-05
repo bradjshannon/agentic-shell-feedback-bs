@@ -22,6 +22,9 @@ npm install -g agentic-feedback
 # Claude Code (default) — also covers VS Code Copilot agent mode
 agentic-feedback install
 
+# Cloud / ephemeral containers (Claude Code cloud, GitHub Actions, etc.)
+agentic-feedback install --remote
+
 # Other agents
 agentic-feedback install --agent cursor
 agentic-feedback install --agent cline
@@ -350,6 +353,33 @@ Verify with `/hooks` inside a Claude Code session. Try a blocked command:
 > Run: ssh host << 'EOF'\necho hi\nEOF
 ```
 Claude should see the block and self-correct to a safe alternative.
+
+---
+
+### Remote and cloud agents (Claude Code cloud, GitHub Actions, any ephemeral container)
+
+Any agent running in an ephemeral container (cloud-hosted Claude Code sessions, CI runners, hosted dev environments) has a fresh filesystem each session. The `--remote` flag adds two extra hooks that solve this:
+
+```bash
+agentic-feedback install --remote
+```
+
+Creates, in addition to the standard hooks:
+- `.claude/hooks/session-start.sh` — wired to `SessionStart`; installs `agentic-feedback` if absent, then seeds the pattern registry from `.agentic-feedback/patterns.json` in the repo
+- `.claude/hooks/stop-remote.sh` — replaces the standard `Stop` hook; runs `learn`, exports patterns to `.agentic-feedback/patterns.json`, then commits and pushes back to the repo
+
+**One-time setup:** commit an initial (empty) patterns file so the import always succeeds:
+
+```bash
+mkdir -p .agentic-feedback
+echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
+git add .agentic-feedback/patterns.json
+git commit -m "chore: seed agentic-feedback pattern registry"
+```
+
+From that point on, the `Stop` hook keeps the file current. Failure patterns accumulate in the repo and are available to every agent and every developer who clones it.
+
+**This works for any LLM agent running in an ephemeral container** — Claude Code cloud sessions, GitHub Actions jobs, Codespaces, Gitpod, Modal, Railway, or any hosted runner — as long as the agent supports `SessionStart` and `Stop` lifecycle hooks and has git push access to the repo.
 
 ---
 
