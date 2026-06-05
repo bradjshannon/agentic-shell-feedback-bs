@@ -18,6 +18,7 @@
     "agentic-feedback": "./dist/cli/index.js"
   },
   "scripts": {
+    "start": "node dist/tui/index.js",
     "build": "tsc",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",

@@ -2,632 +2,66 @@
 
 > Turn repeated agent failures into enforced constraints — automatically, continuously, cross-platform.
 
-**Zero runtime dependencies.** Works out of the box. Stores patterns in `~/.agentic-feedback/`. Advanced config available via TypeScript API.
+**Zero runtime dependencies.** Patterns stored in `~/.agentic-feedback/` — private by default, never committed.
 
 ---
 
 ## The Problem
 
-AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShell agent trying to pass a heredoc payload over SSH, timing out for 30 seconds, and repeating the pattern across sessions. Prose documentation doesn't reliably fix this: agents are inconsistent at following instructions.
+AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShell agent trying to pass a heredoc payload over SSH, timing out for 30 seconds, and repeating the pattern across sessions. Prose instructions don't reliably fix this: agents are inconsistent at following instructions.
 
 **The fix is architectural:** make failures executable constraints, not advice.
 
 ---
 
-## Quick Install
+## Getting Started
 
 ```bash
 git clone https://github.com/bradjshannon/agentic-shell-feedback-bs.git
 cd agentic-shell-feedback-bs
-npm install && npm run build && npm link
-
-# Claude Code (default) — also covers VS Code Copilot agent mode
-agentic-feedback install
-
-# Local VM worktree (Cowork, WSL2, Lima, dev containers with persistent worktree)
-agentic-feedback install --remote
-
-# Truly ephemeral containers (fresh clone each session: cloud runners, GitHub Actions)
-agentic-feedback install --remote --push
-
-# Other agents
-agentic-feedback install --agent cursor
-agentic-feedback install --agent cline
-agentic-feedback install --agent openhands
-agentic-feedback install --agent copilot   # GitHub Copilot cloud coding agent
-agentic-feedback install --agent generic   # shell wrapper, works with any agent
-
-# Install globally (affects all your projects)
-agentic-feedback install --global
-
-# Preview without writing files
-agentic-feedback install --dry-run
+./start.sh
 ```
 
-The `install` command creates the hook scripts and wires them into the agent's config automatically. See [Installing for Your Agent](#installing-for-your-agent) for per-agent details.
+`start.sh` installs dependencies, builds, links `agentic-feedback` globally on your PATH, and launches the TUI. On Windows, run the equivalent manually:
 
-**Installing for multiple agents is safe.** Each agent writes to its own directory (`.claude/`, `.cursor/`, `.clinerules/`, `.openhands/`, `.github/hooks/`) — they never overlap. Running `install` twice for the same agent is also safe: settings files are merged rather than overwritten, so existing config is preserved and hook entries are never duplicated. All agents share a single pattern store (`~/.agentic-feedback/` by default), so failures learned by one agent automatically protect all the others.
-
----
-
-## Integrating with Agents
-
-There are three integration patterns depending on your setup.
-
----
-
-### Pattern 1 — Claude Code hooks (zero agent-code changes)
-
-The most powerful approach: the agent never needs to call this library explicitly. Hooks intercept every shell command automatically.
-
-#### What are Claude Code hooks?
-
-Hooks are shell commands that Claude Code runs automatically at specific points in its lifecycle. They receive context via stdin as JSON and can block actions by exiting with code 2. They're configured in a `settings.json` file — no Claude API changes needed.
-
-**Settings file locations** (all three can coexist; more specific wins):
-
-| File | Scope |
-|------|-------|
-| `~/.claude/settings.json` | All your projects, not committed |
-| `.claude/settings.json` | This repo only, can be committed |
-| `.claude/settings.local.json` | This repo only, gitignored |
-
-**Hook JSON structure:**
-```json
-{
-  "hooks": {
-    "HookEvent": [
-      {
-        "matcher": "ToolName",
-        "hooks": [
-          { "type": "command", "command": "your-script.sh" }
-        ]
-      }
-    ]
-  }
-}
+```powershell
+npm install
+npm run build
+npm link
+npm start
 ```
 
-**Exit code behaviour:**
-
-| Exit code | Effect |
-|-----------|--------|
-| `0` | Hook passed, continue |
-| `1` | Hook failed — stderr shown to user, tool runs anyway |
-| `2` | **Blocked** — stderr is fed back to Claude, tool does not run |
-
-**What's in stdin:** The hook receives a JSON object with `tool_name`, `tool_input` (for PreToolUse), and `tool_output` (for PostToolUse), plus `session_id`, `cwd`, and others.
-
----
-
-#### Step-by-step setup for agentic-feedback
-
-**1. Install the package**
-```bash
-git clone https://github.com/bradjshannon/agentic-shell-feedback-bs.git
-cd agentic-shell-feedback-bs
-npm install && npm run build && npm link
-```
-
-**2. Create the hook scripts**
+After the first run, launch the TUI from any project directory with:
 
 ```bash
-mkdir -p .claude/hooks
-```
-
-`.claude/hooks/preflight.sh`:
-```bash
-#!/bin/bash
-# Reads the Bash tool input from stdin, runs preflight check.
-# Exit 2 = blocked (Claude sees the error and must find an alternative).
-
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-
-if [ -z "$COMMAND" ]; then exit 0; fi
-
-agentic-feedback preflight "$COMMAND"
-STATUS=$?
-
-# agentic-feedback exits 2 when blocked — pass that through
-exit $STATUS
-```
-
-`.claude/hooks/record.sh`:
-```bash
-#!/bin/bash
-# Records the outcome of every Bash command for pattern learning.
-
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_output.exit_code // 0')
-
-if [ -z "$COMMAND" ]; then exit 0; fi
-
-OUTCOME="success"
-[ "$EXIT_CODE" != "0" ] && OUTCOME="mechanical-failure"
-
-echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":0}" \
-  | agentic-feedback record
-
-exit 0  # Always exit 0 — recording should never block
-```
-
-```bash
-chmod +x .claude/hooks/preflight.sh .claude/hooks/record.sh
-```
-
-**3. Wire the hooks in `.claude/settings.json`**
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": ".claude/hooks/preflight.sh" }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": ".claude/hooks/record.sh" }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "agentic-feedback learn" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-**4. Verify**
-
-Run `/hooks` inside a Claude Code session to confirm hooks are loaded. Then try a blocked command:
-```
-> Run: ssh host << 'EOF'\necho hi\nEOF
-```
-Claude should see the block message and self-correct to a safe alternative.
-
-**How it works end-to-end:**
-- `PreToolUse` fires before every `Bash` call — exit 2 blocks it and feeds the reason back to Claude
-- `PostToolUse` records every outcome silently — no agent cooperation needed
-- `Stop` runs `learn()` when the session ends, promoting repeated failures to blocking status
-
----
-
-### Pattern 2 — Agent SDK / custom agents
-
-For agents built with the Claude API or another framework, call the library directly in your execution layer:
-
-```typescript
-import { LearningLoop } from "agentic-feedback";
-
-const loop = new LearningLoop();
-
-async function executeShellCommand(command: string, hints = {}) {
-  // 1. Check before running
-  const check = await loop.preflight(command, hints);
-  if (!check.allowed) {
-    // Return the block reason to the model so it can self-correct
-    return {
-      error: `Command blocked: ${check.reason}`,
-      alternative: check.requiredAlternative,
-    };
-  }
-
-  // 2. Run the command
-  const start = Date.now();
-  try {
-    const output = await runCommand(command);
-    await loop.record({
-      command,
-      context: loop.analyze(command, hints),
-      outcome: "success",
-      duration_ms: Date.now() - start,
-    });
-    return { output };
-  } catch (err) {
-    const outcome = isTimeout(err) ? "timeout" : "mechanical-failure";
-    await loop.record({
-      command,
-      context: loop.analyze(command, hints),
-      outcome,
-      duration_ms: Date.now() - start,
-      errorMessage: String(err),
-    });
-    throw err;
-  }
-}
-
-// At end of session
-await loop.learn();
-await loop.close();
-```
-
-When a command is blocked, **return the reason and alternative to the model** — don't just throw. The model needs to see the alternative to self-correct on the next attempt.
-
----
-
-### Pattern 3 — Wrap the CLI around an existing shell executor
-
-No code changes needed to your agent. Wrap command execution at the process level:
-
-```bash
-#!/bin/bash
-# wrap-exec.sh — drop-in replacement for direct shell execution
-COMMAND="$*"
-
-# Preflight check (exit code 2 = blocked)
-agentic-feedback preflight "$COMMAND"
-PREFLIGHT=$?
-
-if [ $PREFLIGHT -eq 2 ]; then
-  exit 1  # Agent sees the error output from preflight
-fi
-
-# Run it, record the outcome
-START=$(date +%s%3N)
-eval "$COMMAND"
-EXIT=$?
-END=$(date +%s%3N)
-
-OUTCOME="success"
-[ $EXIT -ne 0 ] && OUTCOME="mechanical-failure"
-
-echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":$((END-START))}" \
-  | agentic-feedback record
-
-exit $EXIT
+agentic-feedback
 ```
 
 ---
 
-### Wiring up `learn()`
+## The TUI
 
-Patterns 2 and 3 require you to trigger `learn()` periodically. Good places:
+Everything is configured at runtime in the interactive terminal UI. Use arrow keys to navigate, Tab to switch panels, Space to toggle flags, Enter to run.
 
-- **End of each Claude session** — run `agentic-feedback learn` as a `Stop` hook
-- **Cron job** — `0 * * * * agentic-feedback learn` (hourly)
-- **After N failures** — call `loop.learn()` whenever `record()` returns a new pattern
-
-Pattern 1 (hooks) wires this automatically via the `Stop` hook shown in the setup above.
-
----
-
-### Sharing patterns across agents / team members
-
-Patterns are **private by default** — they stay in `~/.agentic-feedback/` and never enter the repo. See [Pattern privacy and sharing](#pattern-privacy-and-sharing) for how to opt into cross-machine or cross-user sharing.
+| Screen | What it does |
+|--------|-------------|
+| **Install Hooks** | Wire preflight + recording hooks into your agent's config. Choose agent, flags, and run. |
+| **Check Command** | Test a shell command against the preflight gate. See if it would be blocked and why. |
+| **View Report** | Summary of learned patterns and metrics for the last 30 days. |
+| **Run Learn** | Promote advisory patterns to blocking based on failure history. |
+| **Export Patterns** | Save the registry to a JSON file (or stdout). |
+| **Import Patterns** | Merge patterns from a JSON file into the registry. |
 
 ---
 
-## Installing for Your Agent
-
-You can install for multiple agents in the same project — each uses a separate config directory and they never conflict. All agents share a single pattern store, so learned failures protect every agent automatically.
-
-| Agent | Command | Config location | Conflicts with others? |
-|-------|---------|----------------|------------------------|
-| `claude-code` (local) | `install` | `.claude/` | No |
-| `claude-code` (Cowork/WSL) | `install --remote` | `.claude/` | No |
-| `claude-code` (cloud/CI) | `install --remote --push` | `.claude/` | No |
-| `cursor` | `install --agent cursor` | `.cursor/` | No |
-| `cline` | `install --agent cline` | `.clinerules/` | No |
-| `openhands` | `install --agent openhands` | `.openhands/` | No |
-| `copilot` cloud agent | `install --agent copilot` | `.github/hooks/` | No |
-| `generic` | `install --agent generic` | `bin/` | No |
-
-Repeated installs for the same agent are also safe — settings files are merged and scripts are overwritten in place, so nothing accumulates.
-
----
-
-### Claude Code
-
-```bash
-agentic-feedback install
-# or globally (all projects):
-agentic-feedback install --global
-```
-
-Creates:
-- `.claude/hooks/preflight.sh` — blocks known-bad commands (exit 2)
-- `.claude/hooks/record.sh` — logs every outcome
-- `.claude/settings.json` — wires hooks to `PreToolUse`, `PostToolUse`, and `Stop`
-
-Verify with `/hooks` inside a Claude Code session. Try a blocked command:
-```
-> Run: ssh host << 'EOF'\necho hi\nEOF
-```
-Claude should see the block and self-correct to a safe alternative.
-
----
-
-### Remote, cloud, and sandboxed agents
-
-The challenge with any non-local agent is that `~/.agentic-feedback/` may not persist between sessions. There are two distinct scenarios with different solutions.
-
-#### Cowork, WSL2, Lima, dev containers (local VM with persistent worktree)
-
-Claude Cowork runs in a sandboxed local VM (WSL2 on Windows, Lima on macOS) with a local worktree — your project files are mounted directly, not cloned fresh. The VM home directory is persistent across sessions, so `~/.agentic-feedback/` survives restarts. **Standard `install` already works.** 
-
-For extra resilience (in case the VM itself gets reset), add `--remote` to also export patterns into the worktree after each session:
-
-```bash
-agentic-feedback install --remote
-```
-
-This adds:
-- `.claude/hooks/session-start.sh` — seeds the registry from `.agentic-feedback/patterns.json` in the worktree at session start
-- `.claude/hooks/stop-worktree.sh` — exports learned patterns to `.agentic-feedback/patterns.json` at session end (no git commit)
-
-Because the worktree is local, the file persists naturally without any git operations.
-
-#### Truly ephemeral containers (Claude Code cloud, GitHub Actions, fresh clone each session)
-
-When the agent starts from a fresh repo clone each session (cloud runners, CI, hosted cloud sessions), the home dir is wiped and the worktree is new. Use `--remote --push`:
-
-```bash
-agentic-feedback install --remote --push
-```
-
-This adds the same `session-start.sh` (seeds from the file), but the `Stop` hook (`stop-remote.sh`) also commits and pushes `.agentic-feedback/patterns.json` back to the repo so it's available on the next fresh clone.
-
-**One-time setup:** commit an initial patterns file so the first import succeeds:
-
-```bash
-mkdir -p .agentic-feedback
-echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
-git add .agentic-feedback/patterns.json
-git commit -m "chore: seed agentic-feedback pattern registry"
-```
-
-From that point on, the Stop hook keeps the file current and pushes it automatically.
-
-| Scenario | Command | Stop hook behaviour |
-|----------|---------|---------------------|
-| Local dev (default) | `install` | `agentic-feedback learn` |
-| Cowork / WSL2 / Lima | `install --remote` | export to worktree file |
-| Cloud / CI / fresh clone | `install --remote --push` | export → git commit → git push |
-
----
-
-### Cursor
-
-Cursor (v1.7+) supports `beforeShellExecution` and `afterShellExecution` hooks via `.cursor/hooks.json`.
-
-```bash
-agentic-feedback install --agent cursor
-```
-
-Creates:
-- `.cursor/hooks/preflight.sh` — reads `$CURSOR_COMMAND`, exits non-zero to block
-- `.cursor/hooks/record-cursor.sh` — records outcome via `$CURSOR_COMMAND` / `$CURSOR_EXIT_CODE`
-- `.cursor/hooks.json` — wires both hooks
-
-**Note:** Cursor hooks require Cursor v1.7 or later. Use `--global` to install to `~/.cursor/` and affect all projects.
-
----
-
-### Cline
-
-Cline (v3.36+, macOS/Linux only) runs scripts from `.clinerules/hooks/` named after the event.
-
-```bash
-agentic-feedback install --agent cline
-```
-
-Creates:
-- `.clinerules/hooks/beforeShellExecution` — reads `$CLINE_COMMAND`, writes `{"cancel": true}` to block
-
-**Note:** Cline hooks are only available on macOS and Linux. The hook must output JSON to stdout; any non-zero exit or `{"cancel": true}` blocks the command.
-
----
-
-### OpenHands
-
-OpenHands uses the same hook format as Claude Code (`.openhands/hooks.json`).
-
-```bash
-agentic-feedback install --agent openhands
-```
-
-Creates:
-- `.openhands/hooks/preflight.sh`
-- `.openhands/hooks/record.sh`
-- `.openhands/hooks.json` — wires `PreToolUse` / `PostToolUse` for the `Bash` tool
-
----
-
-### GitHub Copilot
-
-There are two distinct Copilot environments with different hook mechanisms.
-
-#### VS Code Copilot agent mode
-
-VS Code Copilot agent mode (v1.96+, requires enabling agent mode in settings) uses the **identical hook format** as Claude Code — `.claude/settings.json`, exit code 2 for blocking, same stdin schema:
-
-```bash
-agentic-feedback install   # claude-code installer covers this too
-```
-
-Both agents read from `.claude/settings.json`, so a single install works for both.
-
-#### GitHub Copilot cloud coding agent
-
-The GitHub Copilot cloud agent runs autonomously in an ephemeral GitHub Actions sandbox. It uses a different hook format: `.github/hooks/*.json` with inline bash scripts, and blocks via JSON stdout rather than exit codes.
-
-```bash
-agentic-feedback install --agent copilot
-```
-
-Creates:
-- `.github/hooks/preflight.json` — `preToolUse` hook; reads `toolArgs.command` from camelCase stdin, outputs `{"permissionDecision":"deny",...}` to block
-- `.github/hooks/record.json` — `postToolUse` hook; records outcome via `toolOutput.exitCode`
-- `copilot-setup-steps.yml` — installs `agentic-feedback` in the sandbox runner
-
-**Required step:** Commit `copilot-setup-steps.yml` to your repo root so the sandbox runner has `agentic-feedback` available:
-
-```yaml
-# copilot-setup-steps.yml (auto-generated)
-steps:
-  - name: Install agentic-feedback
-    run: npm install -g agentic-feedback
-```
-
-**Key differences from Claude Code hooks:**
-
-| | VS Code Copilot / Claude Code | Copilot cloud agent |
-|--|-------------------------------|---------------------|
-| Config file | `.claude/settings.json` | `.github/hooks/*.json` |
-| Script location | File path | Inline bash string |
-| Blocking | Exit code 2 | `{"permissionDecision":"deny"}` in stdout |
-| stdin keys | `tool_input.command` | `toolArgs.command` |
-| Timeout unit | Milliseconds | Seconds |
-
----
-
-### Aider / SWE-agent / any agent without native hooks
-
-Use the generic shell wrapper — a drop-in replacement for your agent's shell executor:
-
-```bash
-agentic-feedback install --agent generic
-```
-
-Creates `bin/wrap-exec.sh`. Configure your agent to use it instead of running commands directly:
-
-```bash
-# Aider
-aider --shell bin/wrap-exec.sh
-
-# SWE-agent: set your tool bundle's shell_cmd to wrap-exec.sh
-
-# Any subprocess-based agent
-SHELL=bin/wrap-exec.sh my-agent run
-```
-
-The wrapper runs preflight before execution and records the outcome afterwards. Run `agentic-feedback learn` at the end of each session (or add a cron job).
-
----
-
-### Continue.dev CLI
-
-Continue.dev CLI (March 2026+) supports `.continue/hooks.json`. Documentation is still incomplete; the format mirrors Claude Code hooks.
-
-```bash
-mkdir -p .continue
-agentic-feedback export > /dev/null  # ensure registry exists
-# Then manually copy .claude/settings.json → .continue/hooks.json
-# and update script paths to use full paths
-```
-
----
-
-### MCP-compatible agents
-
-For agents that expose an MCP `bash`/`shell` tool, wrap the tool at the server level using the TypeScript API:
-
-```typescript
-import { LearningLoop } from "agentic-feedback";
-
-const loop = new LearningLoop();
-
-// In your MCP tool handler for "bash":
-server.tool("bash", async ({ command }) => {
-  const check = await loop.preflight(command);
-  if (!check.allowed) {
-    return { error: `Blocked: ${check.reason}. Try: ${check.requiredAlternative}` };
-  }
-  const start = Date.now();
-  try {
-    const output = await runShell(command);
-    await loop.record({ command, context: loop.analyze(command), outcome: "success", duration_ms: Date.now() - start });
-    return { output };
-  } catch (err) {
-    await loop.record({ command, context: loop.analyze(command), outcome: "mechanical-failure", duration_ms: Date.now() - start });
-    throw err;
-  }
-});
-```
-
----
-
-### Pattern privacy and sharing
-
-**Patterns are private by default.** They live in `~/.agentic-feedback/` on each user's machine and never leave it. The installer also adds `.agentic-feedback/` to `.gitignore` so the worktree export file (used by `--remote`) can never be accidentally committed.
-
-Each person who clones your repo gets a fresh, empty registry and builds their own patterns independently.
-
-**Opt-in sharing with `--remote --push`**
-
-If you *want* patterns to be shared across a team via the repo, use `--remote --push`. This is an explicit opt-in:
-
-```bash
-agentic-feedback install --remote --push
-```
-
-With this flag, the Stop hook commits and pushes `.agentic-feedback/patterns.json` back to the repo after each session. Cloners who also run `--remote --push` get those patterns on next pull. Concurrent writes are handled safely: the Stop hook fetches remote patterns and merges them before exporting, then retries on a rejected push.
-
-**Manual cross-machine sync (no git)**
-
-```bash
-# Export your patterns to a file
-agentic-feedback export > my-patterns.json
-
-# Import on another machine
-agentic-feedback import < my-patterns.json
-```
-
-`import` deduplicates by signature — safe to run multiple times or against patterns from multiple sources.
-
-For teams who want a shared live store without git commits, point everyone at the same directory or implement a custom storage backend:
-```typescript
-const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
-// or a custom StorageAdapter for Redis, S3, etc.
-```
----
-
-## Quick Start
-
-```typescript
-import { LearningLoop } from "agentic-feedback";
-
-const loop = new LearningLoop(); // zero config — stores at ~/.agentic-feedback/
-
-// Before executing a command:
-const result = await loop.preflight(
-  "ssh user@host << 'EOF'\necho hi\nEOF",
-  { shell: "powershell", target: "remote-ssh" }
-);
-
-if (!result.allowed) {
-  console.log("BLOCKED:", result.reason);
-  console.log("Use instead:", result.requiredAlternative);
-  // result.requiredAlternative: "Use stdin piping: ..."
-}
-
-// After execution (record the outcome):
-await loop.record({
-  command,
-  context: loop.analyze(command, hints),
-  outcome: "timeout",          // or "success" | "mechanical-failure" | "semantic-failure"
-  duration_ms: 30_000,
-  alternativeUsed: "stdin piping",  // optional: what worked instead
-});
-
-// Periodically — or after each session:
-const learned = await loop.learn();
-// { promoted: 1, expired: 0 }
-// Pattern is now "blocking" — will be enforced on next preflight
-```
+> **Note — ephemeral containers:** if you select `--remote --push` in the TUI (for cloud runners or GitHub Actions where the repo is cloned fresh each session), commit a seed file once so the first import has something to read:
+>
+> ```bash
+> mkdir -p .agentic-feedback
+> echo '{"version":1,"patterns":[],"traces":[]}' > .agentic-feedback/patterns.json
+> git add .agentic-feedback/patterns.json
+> git commit -m "chore: seed agentic-feedback pattern registry"
+> ```
 
 ---
 
@@ -658,149 +92,78 @@ learn()
 
 ---
 
-## Preflight Gate — Built-in Rules
+## TypeScript API
 
-| Rule ID | Condition | Verdict |
-|---------|-----------|---------|
-| `POWERSHELL_SSH_HEREDOC` | PowerShell + SSH + heredoc or multiline | **deny** |
-| `CMD_SSH_MULTILINE` | Windows CMD + SSH + multiline | **deny** |
-| `HEREDOC_REMOTE_POWERSHELL` | PowerShell + any remote + heredoc | **deny** |
-| `COMPLEX_INLINE_SSH` | SSH + inline + > 300 chars | warn |
-| `NESTED_QUOTE_SSH` | SSH + complex quoting | warn |
-
----
-
-## Transport Broker
-
-When a command is blocked, get a safe alternative automatically:
+For agents built with the Claude API or another framework, call the library directly:
 
 ```typescript
-const { preflight, recommendation } = await loop.safeExec(command, hints);
+import { LearningLoop } from "agentic-feedback";
 
-if (!preflight.allowed) {
-  console.log(recommendation.strategy);       // "file" | "stdin" | "inline"
-  console.log(recommendation.commandTemplate); // ready-to-use safe command
-  console.log(recommendation.rationale);       // why this strategy
+const loop = new LearningLoop(); // zero config — stores at ~/.agentic-feedback/
+
+// Before executing a command:
+const result = await loop.preflight(
+  "ssh user@host << 'EOF'\necho hi\nEOF",
+  { shell: "powershell", target: "remote-ssh" }
+);
+
+if (!result.allowed) {
+  // Return the reason to the model so it can self-correct
+  return { error: `Blocked: ${result.reason}`, alternative: result.requiredAlternative };
 }
+
+// After execution:
+await loop.record({
+  command,
+  context: loop.analyze(command, hints),
+  outcome: "timeout",          // "success" | "timeout" | "mechanical-failure" | "semantic-failure"
+  duration_ms: 30_000,
+});
+
+// At end of session:
+await loop.learn();
+await loop.close();
 ```
 
-**Strategy selection:**
-
-| Condition | Strategy |
-|-----------|----------|
-| PowerShell + SSH + multiline/heredoc | `file` (scp + execute) |
-| Payload ≤ 200 chars, no heredoc, no complex quotes | `inline` |
-| Payload ≤ 2000 chars, no complex quotes | `stdin` (printf pipe) |
-| Payload > 2000 chars or complex quotes | `file` |
-
----
-
-## Advanced Configuration
+**Advanced configuration:**
 
 ```typescript
 const loop = new LearningLoop({
-  // Storage
-  storageDir: "/path/to/custom/dir",    // default: ~/.agentic-feedback
-  storage: customStorageAdapter,         // implement StorageAdapter interface
-
-  // Policy thresholds
-  promotionOccurrences: 2,              // default: 2 failures → blocking
-  promotionWindowDays: 30,              // default: within 30 days
-  promotionWastedMs: 60_000,            // default: 60s wasted → immediate block
-  expirationDays: 90,                   // default: 90 days inactive → expired
-
-  // Gate behavior
-  enableBuiltInRules: false,            // disable built-ins (use custom only)
-  customRules: [
-    {
-      id: "MY_RULE",
-      description: "Block risky operation",
-      match: (ctx) => ctx.target === "remote-ssh" && ctx.payloadLength > 500,
-      verdict: "deny",
-      reason: "Payload too large for SSH",
-      alternative: "Transfer a script file instead",
-    },
-  ],
-  blockOnConfidence: 0.7,               // default: 0.7 confidence to block
+  storageDir: "/path/to/custom/dir",
+  promotionOccurrences: 2,       // failures before blocking (default: 2)
+  promotionWindowDays: 30,        // window for counting failures (default: 30)
+  promotionWastedMs: 60_000,      // wasted time threshold (default: 60s)
+  expirationDays: 90,             // days inactive before expiry (default: 90)
+  enableBuiltInRules: false,      // disable built-in rules
+  customRules: [ /* ... */ ],
 });
 ```
 
 ---
 
-## CLI
+## Pattern Privacy and Sharing
+
+Patterns live in `~/.agentic-feedback/` — they never enter the repo by default. Each user who clones your repo starts with a fresh, empty registry and builds their own patterns independently.
+
+To share patterns across machines manually:
 
 ```bash
-# Install hooks for your agent (default: claude-code)
-agentic-feedback install
-agentic-feedback install --agent cursor
-agentic-feedback install --agent cline
-agentic-feedback install --agent openhands
-agentic-feedback install --agent copilot
-agentic-feedback install --agent generic
-agentic-feedback install --global            # install to home dir
-agentic-feedback install --dry-run           # preview without writing
+# Export
+agentic-feedback export > my-patterns.json
 
-# Check a command
-agentic-feedback preflight "ssh user@host 'echo hi'" --shell powershell --target remote-ssh
-
-# Record an outcome
-echo '{"command":"ssh ...","context":{...},"outcome":"timeout","duration_ms":30000}' \
-  | agentic-feedback record
-
-# Run policy engine
-agentic-feedback learn
-
-# View report
-agentic-feedback report
-
-# Export/import patterns (share across teams)
-agentic-feedback export > patterns.json
-agentic-feedback import < team-patterns.json
+# Import on another machine (deduplicates — safe to run multiple times)
+agentic-feedback import < my-patterns.json
 ```
 
----
+Both operations are also available in the TUI under **Export Patterns** and **Import Patterns**.
 
-## Eval & Metrics
+To use a shared network store:
 
 ```typescript
-// Baseline: what's your current failure rate?
-const metrics = await loop.eval.baseline(30); // last 30 days
-// {
-//   firstAttemptSuccessRate: 0.73,
-//   timeoutMinutesPer100Tasks: 12.4,
-//   repeatedPatternRecurrenceRate: 0.4,
-//   transportSwitchCompliance: 0.6,
-// }
-
-// Compare candidate changes vs. baseline
-const report = await loop.eval.compare(candidateTraces, candidatePatterns);
-// { recommendation: "promote" | "reject" | "neutral", summary: "..." }
+const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
 ```
 
-**Key metrics:**
-
-| Metric | Description |
-|--------|-------------|
-| `firstAttemptSuccessRate` | % of commands that succeeded first try |
-| `timeoutMinutesPer100Tasks` | Minutes wasted on timeouts per 100 commands |
-| `repeatedPatternRecurrenceRate` | % of known-bad patterns that recurred |
-| `transportSwitchCompliance` | % of mechanical failures where agent switched transport |
-
----
-
-## Custom Storage Adapter
-
-```typescript
-import type { StorageAdapter, RegistryData } from "agentic-feedback";
-
-class RedisStore implements StorageAdapter {
-  async load(): Promise<RegistryData> { /* ... */ }
-  async save(data: RegistryData): Promise<void> { /* ... */ }
-  async close(): Promise<void> { /* ... */ }
-}
-
-const loop = new LearningLoop({ storage: new RedisStore() });
-```
+Or implement a custom `StorageAdapter` for Redis, S3, etc.
 
 ---
 
@@ -809,14 +172,6 @@ const loop = new LearningLoop({ storage: new RedisStore() });
 > "From 'agents should remember docs' to 'system refuses known-bad moves and injects known-good moves.'"
 
 1. **Executable, not narrative** — structured patterns, not prose
-2. **One-strike mechanical failure switching** — ban the same transport class for the session
-3. **Auto-promote on recurrence** — 2 failures in 30 days = blocking
-4. **Zero supply-chain risk** — no runtime dependencies
-5. **Governance problem, not prompt problem** — control the system, not the model
-
----
-
-## Requirements
-
-- Node.js ≥ 18
-- Zero runtime dependencies
+2. **Auto-promote on recurrence** — 2 failures in 30 days = blocking
+3. **Zero supply-chain risk** — no runtime dependencies
+4. **Governance problem, not prompt problem** — control the system, not the model
