@@ -99,16 +99,36 @@ exit 0
 const STOP_REMOTE_SH = `#!/bin/bash
 # agentic-feedback stop hook (cloud) — exports patterns and pushes to repo.
 # Use this for ephemeral containers that start from a fresh clone each session.
+#
+# Merge strategy for concurrent writers:
+#   1. Fetch the latest remote patterns and import (merge by signature, no duplicates)
+#   2. Export the merged set
+#   3. Commit and push; if push is rejected (concurrent write), pull --rebase and retry once
 
 agentic-feedback learn
 
 mkdir -p .agentic-feedback
+
+# Fetch remote patterns and merge them in before exporting, so concurrent
+# writes from other users are preserved rather than overwritten.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ -n "$BRANCH" ]; then
+  git fetch origin "$BRANCH" 2>/dev/null
+  REMOTE_JSON=$(git show "origin/$BRANCH:.agentic-feedback/patterns.json" 2>/dev/null)
+  if [ -n "$REMOTE_JSON" ]; then
+    echo "$REMOTE_JSON" | agentic-feedback import 2>/dev/null || true
+  fi
+fi
+
 agentic-feedback export > .agentic-feedback/patterns.json
 
 git add .agentic-feedback/patterns.json 2>/dev/null
 if ! git diff --staged --quiet 2>/dev/null; then
   git commit -m "chore: update agentic-feedback patterns [skip ci]" 2>/dev/null
-  git push 2>/dev/null || true
+  if ! git push 2>/dev/null; then
+    # Rejected — another writer pushed first. Rebase and retry once.
+    git pull --rebase 2>/dev/null && git push 2>/dev/null || true
+  fi
 fi
 
 exit 0

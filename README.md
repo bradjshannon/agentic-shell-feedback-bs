@@ -571,17 +571,41 @@ server.tool("bash", async ({ command }) => {
 
 ---
 
-### Sharing patterns across agents and machines
+### Sharing patterns across agents, machines, and team members
 
+Patterns are distributed via git as a regular committed file. Two flows:
+
+**Downstream (repo → cloners) — automatic.**
+`.agentic-feedback/patterns.json` travels with the repo. Anyone who clones or `git pull`s gets the latest patterns. With `--remote` installed, `session-start.sh` imports them at the start of each session automatically.
+
+**Upstream (contributor → repo) — depends on write access.**
+
+| Who | What happens |
+|-----|--------------|
+| Repo owner / teammates with push access | Stop hook merges remote patterns, commits, and pushes automatically |
+| Read-only contributors | `git push` fails silently; patterns stay local. Contribute via PR (see below). |
+
+**Contributing patterns via PR:**
 ```bash
-# Export learned patterns and commit them
 agentic-feedback export > .agentic-feedback/patterns.json
+git checkout -b chore/share-patterns
+git add .agentic-feedback/patterns.json
+git commit -m "chore: contribute learned failure patterns"
+# open a PR — maintainer reviews and merges
+```
 
-# On a new machine or CI container, seed from the export
+`agentic-feedback import` deduplicates by signature so merging a PR with pattern updates is always safe:
+```bash
 agentic-feedback import < .agentic-feedback/patterns.json
 ```
 
-All agents reading from the same `storageDir` (or seeded from the same export) share pattern history automatically.
+**Concurrent pushes from multiple teammates** are handled by the Stop hook: it fetches the current remote patterns and merges them in before exporting, then retries the push once if rejected. Patterns merge additively — nothing learned by either writer is lost.
+
+For very large teams, point everyone at a shared storage backend to avoid git churn entirely:
+```typescript
+const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
+// or implement a custom StorageAdapter for Redis, S3, etc.
+```
 
 ---
 
