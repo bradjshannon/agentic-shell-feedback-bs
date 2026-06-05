@@ -42,7 +42,7 @@ export function shouldExpire(
   now: Date = new Date(),
   thresholds: PromotionThresholds = DEFAULT_THRESHOLDS,
 ): boolean {
-  if (pattern.status === "expired") return false;
+  if (pattern.status !== "advisory") return false;
 
   const daysSinceLastSeen = daysBetween(new Date(pattern.lastSeen), now);
   return daysSinceLastSeen >= thresholds.expirationDays;

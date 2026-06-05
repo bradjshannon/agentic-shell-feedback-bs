@@ -83,14 +83,14 @@ describe("shouldExpire", () => {
     expect(shouldExpire(p, new Date())).toBe(true);
   });
 
-  it("expires blocking pattern not seen in window", () => {
+  it("does not expire blocking pattern even if not seen in window", () => {
     const oldDate = new Date();
     oldDate.setDate(oldDate.getDate() - 100);
     const p = makePattern({
       status: "blocking",
       lastSeen: oldDate.toISOString(),
     });
-    expect(shouldExpire(p, new Date())).toBe(true);
+    expect(shouldExpire(p, new Date())).toBe(false);
   });
 
   it("does not re-expire an already expired pattern", () => {

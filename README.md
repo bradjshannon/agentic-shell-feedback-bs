@@ -12,7 +12,7 @@ This tool gives them that memory. Every time an AI assistant runs a shell comman
 
 - A failure happens **twice within 30 days** → that command is automatically blocked from then on
 - A failure **wastes more than 60 seconds** → blocked immediately
-- A command causes **no problems for 90 days** → the block is lifted
+- An advisory pattern causes **no problems for 90 days** → it's forgotten
 
 When a command is blocked, the AI is told what to do instead — so it self-corrects without you having to intervene.
 
@@ -111,7 +111,7 @@ record(trace)
 
 learn()
   └─ PolicyEngine: advisory → blocking when seen ≥ 2× in 30 days OR ≥ 60s wasted
-                   blocking/advisory → expired when not seen in 90 days
+                   advisory → expired when not seen in 90 days
 ```
 
 ---
