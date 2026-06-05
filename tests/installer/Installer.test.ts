@@ -106,6 +106,38 @@ describe("install — claude-code (default)", () => {
     const home = (await import("node:os")).homedir();
     expect(result.filesWritten.some((f) => f.startsWith(home))).toBe(true);
   });
+
+  it("adds .agentic-feedback/ to .gitignore by default", async () => {
+    await install({ cwd: dir });
+    const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
+    expect(gitignore).toContain(".agentic-feedback/");
+  });
+
+  it("appends to existing .gitignore without duplicating", async () => {
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(join(dir, ".gitignore"), "node_modules/\ndist/\n", "utf8");
+    await install({ cwd: dir });
+    const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
+    expect(gitignore).toContain("node_modules/");
+    expect(gitignore).toContain(".agentic-feedback/");
+    expect(gitignore.split(".agentic-feedback/")).toHaveLength(2); // only one occurrence
+  });
+
+  it("skips .gitignore when .agentic-feedback/ is already present", async () => {
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(join(dir, ".gitignore"), ".agentic-feedback/\n", "utf8");
+    const result = await install({ cwd: dir });
+    expect(result.skipped.some((f) => f.endsWith(".gitignore"))).toBe(true);
+  });
+
+  it("does NOT add .agentic-feedback/ to .gitignore when --push is set", async () => {
+    await install({ cwd: dir, push: true });
+    const { existsSync } = await import("node:fs");
+    if (existsSync(join(dir, ".gitignore"))) {
+      const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
+      expect(gitignore).not.toContain(".agentic-feedback/");
+    }
+  });
 });
 
 describe("install — cursor", () => {

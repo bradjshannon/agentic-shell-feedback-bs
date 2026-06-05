@@ -303,21 +303,7 @@ Pattern 1 (hooks) wires this automatically via the `Stop` hook shown in the setu
 
 ### Sharing patterns across agents / team members
 
-Export your registry and commit it, or share via a common path:
-
-```bash
-# Export learned patterns to the repo
-agentic-feedback export > .claude/failure-patterns.json
-
-# On a new machine / fresh container, seed the registry
-agentic-feedback import < .claude/failure-patterns.json
-```
-
-Or point all agents at a shared storage directory:
-
-```typescript
-const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
-```
+Patterns are **private by default** — they stay in `~/.agentic-feedback/` and never enter the repo. See [Pattern privacy and sharing](#pattern-privacy-and-sharing) for how to opt into cross-machine or cross-user sharing.
 
 ---
 
@@ -571,42 +557,39 @@ server.tool("bash", async ({ command }) => {
 
 ---
 
-### Sharing patterns across agents, machines, and team members
+### Pattern privacy and sharing
 
-Patterns are distributed via git as a regular committed file. Two flows:
+**Patterns are private by default.** They live in `~/.agentic-feedback/` on each user's machine and never leave it. The installer also adds `.agentic-feedback/` to `.gitignore` so the worktree export file (used by `--remote`) can never be accidentally committed.
 
-**Downstream (repo → cloners) — automatic.**
-`.agentic-feedback/patterns.json` travels with the repo. Anyone who clones or `git pull`s gets the latest patterns. With `--remote` installed, `session-start.sh` imports them at the start of each session automatically.
+Each person who clones your repo gets a fresh, empty registry and builds their own patterns independently.
 
-**Upstream (contributor → repo) — depends on write access.**
+**Opt-in sharing with `--remote --push`**
 
-| Who | What happens |
-|-----|--------------|
-| Repo owner / teammates with push access | Stop hook merges remote patterns, commits, and pushes automatically |
-| Read-only contributors | `git push` fails silently; patterns stay local. Contribute via PR (see below). |
+If you *want* patterns to be shared across a team via the repo, use `--remote --push`. This is an explicit opt-in:
 
-**Contributing patterns via PR:**
 ```bash
-agentic-feedback export > .agentic-feedback/patterns.json
-git checkout -b chore/share-patterns
-git add .agentic-feedback/patterns.json
-git commit -m "chore: contribute learned failure patterns"
-# open a PR — maintainer reviews and merges
+agentic-feedback install --remote --push
 ```
 
-`agentic-feedback import` deduplicates by signature so merging a PR with pattern updates is always safe:
+With this flag, the Stop hook commits and pushes `.agentic-feedback/patterns.json` back to the repo after each session. Cloners who also run `--remote --push` get those patterns on next pull. Concurrent writes are handled safely: the Stop hook fetches remote patterns and merges them before exporting, then retries on a rejected push.
+
+**Manual cross-machine sync (no git)**
+
 ```bash
-agentic-feedback import < .agentic-feedback/patterns.json
+# Export your patterns to a file
+agentic-feedback export > my-patterns.json
+
+# Import on another machine
+agentic-feedback import < my-patterns.json
 ```
 
-**Concurrent pushes from multiple teammates** are handled by the Stop hook: it fetches the current remote patterns and merges them in before exporting, then retries the push once if rejected. Patterns merge additively — nothing learned by either writer is lost.
+`import` deduplicates by signature — safe to run multiple times or against patterns from multiple sources.
 
-For very large teams, point everyone at a shared storage backend to avoid git churn entirely:
+For teams who want a shared live store without git commits, point everyone at the same directory or implement a custom storage backend:
 ```typescript
 const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
-// or implement a custom StorageAdapter for Redis, S3, etc.
+// or a custom StorageAdapter for Redis, S3, etc.
 ```
-
 ---
 
 ## Quick Start

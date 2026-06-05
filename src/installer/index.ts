@@ -442,6 +442,12 @@ async function installClaudeCode(
   const hookConfig = isGlobal ? CLAUDE_SETTINGS_HOOKS_GLOBAL : CLAUDE_SETTINGS_HOOKS;
   await patchSettings(settingsPath, hookConfig, options, result);
 
+  // Patterns are private by default. Gitignore the worktree patterns file so it
+  // can never be accidentally committed unless --push is explicitly requested.
+  if (!options.push && !isGlobal) {
+    await ensureGitignore(cwd, ".agentic-feedback/", options, result);
+  }
+
   if (options.remote ?? options.push) {
     const usePush = options.push ?? false;
     const stopScript = usePush ? STOP_REMOTE_SH : STOP_WORKTREE_SH;
@@ -550,6 +556,31 @@ async function patchSetupSteps(
 }
 
 // ─── File helpers ──────────────────────────────────────────────────────────
+
+async function ensureGitignore(
+  cwd: string,
+  entry: string,
+  options: InstallOptions,
+  result: InstallResult,
+): Promise<void> {
+  const gitignorePath = join(cwd, ".gitignore");
+  if (options.dryRun) {
+    result.filesPatched.push(gitignorePath);
+    return;
+  }
+  let content = "";
+  if (existsSync(gitignorePath)) {
+    content = await readFile(gitignorePath, "utf8");
+    const lines = content.split("\n").map((l) => l.trim());
+    if (lines.some((l) => l === entry || l === `/${entry}`)) {
+      result.skipped.push(gitignorePath);
+      return;
+    }
+  }
+  const suffix = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
+  await writeFile(gitignorePath, `${content}${suffix}${entry}\n`, "utf8");
+  result.filesPatched.push(gitignorePath);
+}
 
 async function ensureDir(
   dir: string,
