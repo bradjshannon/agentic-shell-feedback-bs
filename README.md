@@ -2,15 +2,26 @@
 
 > Turn repeated agent failures into enforced constraints — automatically, continuously, cross-platform.
 
-**Zero runtime dependencies.** Patterns stored in `~/.agentic-feedback/` — private by default, never committed.
+---
+
+## What is this?
+
+AI coding assistants like Claude, Cursor, and Copilot make the same mistakes over and over. They'll try a command that doesn't work, get an error, and then try the exact same thing again in the next session — because they have no memory of what failed before.
+
+This tool gives them that memory. Every time an AI assistant runs a shell command, agentic-feedback watches what happens. When something fails, it records the failure. After a pattern repeats itself, agentic-feedback starts blocking that command automatically — before the AI can waste your time on it again. It also suggests what to do instead.
+
+No configuration required. No sharing of data. Everything it learns stays on your machine.
 
 ---
 
-## The Problem
+## Philosophy
 
-AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShell agent trying to pass a heredoc payload over SSH, timing out for 30 seconds, and repeating the pattern across sessions. Prose instructions don't reliably fix this: agents are inconsistent at following instructions.
+> "From 'agents should remember docs' to 'system refuses known-bad moves and injects known-good moves.'"
 
-**The fix is architectural:** make failures executable constraints, not advice.
+1. **Executable, not narrative** — structured patterns, not prose
+2. **Auto-promote on recurrence** — 2 failures in 30 days = blocking
+3. **Zero supply-chain risk** — no runtime dependencies
+4. **Governance problem, not prompt problem** — control the system, not the model
 
 ---
 
@@ -22,7 +33,7 @@ cd agentic-shell-feedback-bs
 ./start.sh
 ```
 
-`start.sh` installs dependencies, builds, links `agentic-feedback` globally on your PATH, and launches the TUI. On Windows, run the equivalent manually:
+This sets everything up and opens an interactive menu where you can configure which AI assistants to monitor and adjust any settings. On Windows, run the equivalent manually:
 
 ```powershell
 npm install
@@ -31,7 +42,7 @@ npm link
 npm start
 ```
 
-After the first run, launch the TUI from any project directory with:
+After the first run, open the menu from any project directory with:
 
 ```bash
 agentic-feedback
@@ -54,7 +65,7 @@ Everything is configured at runtime in the interactive terminal UI. Use arrow ke
 
 ---
 
-> **Note — ephemeral containers:** if you select `--remote --push` in the TUI (for cloud runners or GitHub Actions where the repo is cloned fresh each session), commit a seed file once so the first import has something to read:
+> **Note — ephemeral containers:** if you select `--remote --push` in the TUI (for cloud runners or GitHub Actions where the container starts fresh each session), commit a seed file once so the first import has something to read:
 >
 > ```bash
 > mkdir -p .agentic-feedback
@@ -62,6 +73,24 @@ Everything is configured at runtime in the interactive terminal UI. Use arrow ke
 > git add .agentic-feedback/patterns.json
 > git commit -m "chore: seed agentic-feedback pattern registry"
 > ```
+
+---
+
+## Pattern Privacy and Sharing
+
+Learned patterns stay on the local machine — they are never uploaded or shared by default. Each person who sets up agentic-feedback starts with a fresh, empty history and builds their own over time.
+
+To share patterns between machines manually:
+
+```bash
+# Export
+agentic-feedback export > my-patterns.json
+
+# Import on another machine (deduplicates — safe to run multiple times)
+agentic-feedback import < my-patterns.json
+```
+
+Both operations are also available in the TUI under **Export Patterns** and **Import Patterns**.
 
 ---
 
@@ -139,24 +168,6 @@ const loop = new LearningLoop({
 });
 ```
 
----
-
-## Pattern Privacy and Sharing
-
-Patterns live in `~/.agentic-feedback/` — they never enter the repo by default. Each user who clones your repo starts with a fresh, empty registry and builds their own patterns independently.
-
-To share patterns across machines manually:
-
-```bash
-# Export
-agentic-feedback export > my-patterns.json
-
-# Import on another machine (deduplicates — safe to run multiple times)
-agentic-feedback import < my-patterns.json
-```
-
-Both operations are also available in the TUI under **Export Patterns** and **Import Patterns**.
-
 To use a shared network store:
 
 ```typescript
@@ -164,14 +175,3 @@ const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
 ```
 
 Or implement a custom `StorageAdapter` for Redis, S3, etc.
-
----
-
-## Philosophy
-
-> "From 'agents should remember docs' to 'system refuses known-bad moves and injects known-good moves.'"
-
-1. **Executable, not narrative** — structured patterns, not prose
-2. **Auto-promote on recurrence** — 2 failures in 30 days = blocking
-3. **Zero supply-chain risk** — no runtime dependencies
-4. **Governance problem, not prompt problem** — control the system, not the model
