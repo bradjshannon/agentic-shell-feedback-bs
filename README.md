@@ -19,13 +19,14 @@ AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShel
 ```bash
 npm install -g agentic-feedback
 
-# Claude Code (default)
+# Claude Code (default) — also covers VS Code Copilot agent mode
 agentic-feedback install
 
 # Other agents
 agentic-feedback install --agent cursor
 agentic-feedback install --agent cline
 agentic-feedback install --agent openhands
+agentic-feedback install --agent copilot   # GitHub Copilot cloud coding agent
 agentic-feedback install --agent generic   # shell wrapper, works with any agent
 
 # Install globally (affects all your projects)
@@ -382,6 +383,54 @@ Creates:
 
 ---
 
+### GitHub Copilot
+
+There are two distinct Copilot environments with different hook mechanisms.
+
+#### VS Code Copilot agent mode
+
+VS Code Copilot agent mode (v1.96+, requires enabling agent mode in settings) uses the **identical hook format** as Claude Code — `.claude/settings.json`, exit code 2 for blocking, same stdin schema:
+
+```bash
+agentic-feedback install   # claude-code installer covers this too
+```
+
+Both agents read from `.claude/settings.json`, so a single install works for both.
+
+#### GitHub Copilot cloud coding agent
+
+The GitHub Copilot cloud agent runs autonomously in an ephemeral GitHub Actions sandbox. It uses a different hook format: `.github/hooks/*.json` with inline bash scripts, and blocks via JSON stdout rather than exit codes.
+
+```bash
+agentic-feedback install --agent copilot
+```
+
+Creates:
+- `.github/hooks/preflight.json` — `preToolUse` hook; reads `toolArgs.command` from camelCase stdin, outputs `{"permissionDecision":"deny",...}` to block
+- `.github/hooks/record.json` — `postToolUse` hook; records outcome via `toolOutput.exitCode`
+- `copilot-setup-steps.yml` — installs `agentic-feedback` in the sandbox runner
+
+**Required step:** Commit `copilot-setup-steps.yml` to your repo root so the sandbox runner has `agentic-feedback` available:
+
+```yaml
+# copilot-setup-steps.yml (auto-generated)
+steps:
+  - name: Install agentic-feedback
+    run: npm install -g agentic-feedback
+```
+
+**Key differences from Claude Code hooks:**
+
+| | VS Code Copilot / Claude Code | Copilot cloud agent |
+|--|-------------------------------|---------------------|
+| Config file | `.claude/settings.json` | `.github/hooks/*.json` |
+| Script location | File path | Inline bash string |
+| Blocking | Exit code 2 | `{"permissionDecision":"deny"}` in stdout |
+| stdin keys | `tool_input.command` | `toolArgs.command` |
+| Timeout unit | Milliseconds | Seconds |
+
+---
+
 ### Aider / SWE-agent / any agent without native hooks
 
 Use the generic shell wrapper — a drop-in replacement for your agent's shell executor:
@@ -602,6 +651,7 @@ agentic-feedback install
 agentic-feedback install --agent cursor
 agentic-feedback install --agent cline
 agentic-feedback install --agent openhands
+agentic-feedback install --agent copilot
 agentic-feedback install --agent generic
 agentic-feedback install --global            # install to home dir
 agentic-feedback install --dry-run           # preview without writing

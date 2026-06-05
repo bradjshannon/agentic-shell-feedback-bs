@@ -180,6 +180,68 @@ describe("install — openhands", () => {
   });
 });
 
+describe("install — copilot (GitHub cloud agent)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("creates .github/hooks/preflight.json with version and preToolUse", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const raw = await readFile(join(dir, ".github", "hooks", "preflight.json"), "utf8");
+    const config = JSON.parse(raw) as { version: number; hooks: { preToolUse: unknown[] } };
+    expect(config.version).toBe(1);
+    expect(config.hooks.preToolUse).toHaveLength(1);
+  });
+
+  it("creates .github/hooks/record.json with postToolUse", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const raw = await readFile(join(dir, ".github", "hooks", "record.json"), "utf8");
+    const config = JSON.parse(raw) as { version: number; hooks: { postToolUse: unknown[] } };
+    expect(config.version).toBe(1);
+    expect(config.hooks.postToolUse).toHaveLength(1);
+  });
+
+  it("preflight hook bash script contains agentic-feedback preflight", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const raw = await readFile(join(dir, ".github", "hooks", "preflight.json"), "utf8");
+    expect(raw).toContain("agentic-feedback preflight");
+  });
+
+  it("preflight hook bash script outputs permissionDecision deny on block", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const raw = await readFile(join(dir, ".github", "hooks", "preflight.json"), "utf8");
+    expect(raw).toContain("permissionDecision");
+    expect(raw).toContain("deny");
+  });
+
+  it("record hook bash script reads toolArgs.command (camelCase stdin)", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const raw = await readFile(join(dir, ".github", "hooks", "record.json"), "utf8");
+    expect(raw).toContain("toolArgs.command");
+  });
+
+  it("creates copilot-setup-steps.yml for runner npm install", async () => {
+    await install({ agent: "copilot", cwd: dir });
+    const yaml = await readFile(join(dir, "copilot-setup-steps.yml"), "utf8");
+    expect(yaml).toContain("agentic-feedback");
+    expect(yaml).toContain("npm install");
+  });
+
+  it("dry-run reports files that would be created", async () => {
+    const result = await install({ agent: "copilot", cwd: dir, dryRun: true });
+    const allFiles = [...result.filesWritten, ...result.filesPatched];
+    expect(allFiles.some((f) => f.endsWith("preflight.json"))).toBe(true);
+    expect(allFiles.some((f) => f.endsWith("record.json"))).toBe(true);
+    expect(allFiles.some((f) => f.endsWith("copilot-setup-steps.yml"))).toBe(true);
+  });
+});
+
 describe("install — generic", () => {
   let dir: string;
 

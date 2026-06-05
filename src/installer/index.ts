@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-export type AgentTarget = "claude-code" | "cursor" | "cline" | "openhands" | "generic";
+export type AgentTarget = "claude-code" | "cursor" | "cline" | "openhands" | "generic" | "copilot";
 
 export interface InstallOptions {
   agent?: AgentTarget;
@@ -185,6 +185,67 @@ function makeOpenHandsHooks(hooksDir: string): unknown {
   };
 }
 
+// ─── GitHub Copilot cloud agent templates ─────────────────────────────────
+//
+// GitHub Copilot coding agent uses .github/hooks/*.json with inline bash scripts.
+// Blocking is done via JSON stdout ({"permissionDecision":"deny",...}), not exit code 2.
+// stdin uses camelCase: toolName, toolArgs.command, toolOutput.exitCode.
+// Runner must have agentic-feedback installed via copilot-setup-steps.yml.
+
+const COPILOT_PREFLIGHT_JSON = {
+  version: 1,
+  hooks: {
+    preToolUse: [
+      {
+        type: "command",
+        // Reads toolArgs.command from camelCase stdin; outputs deny JSON if blocked.
+        bash: [
+          "INPUT=$(cat)",
+          "COMMAND=$(echo \"$INPUT\" | jq -r '.toolArgs.command // empty')",
+          "[ -z \"$COMMAND\" ] && exit 0",
+          "REASON=$(agentic-feedback preflight \"$COMMAND\" 2>&1)",
+          "STATUS=$?",
+          "if [ $STATUS -eq 2 ]; then",
+          "  echo \"{\\\"permissionDecision\\\":\\\"deny\\\",\\\"permissionDecisionReason\\\":$(echo \\\"$REASON\\\" | jq -Rs .)}\"",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        timeoutSec: 30,
+      },
+    ],
+  },
+};
+
+const COPILOT_RECORD_JSON = {
+  version: 1,
+  hooks: {
+    postToolUse: [
+      {
+        type: "command",
+        bash: [
+          "INPUT=$(cat)",
+          "COMMAND=$(echo \"$INPUT\" | jq -r '.toolArgs.command // empty')",
+          "EXIT_CODE=$(echo \"$INPUT\" | jq -r '.toolOutput.exitCode // 0')",
+          "[ -z \"$COMMAND\" ] && exit 0",
+          "OUTCOME=\"success\"",
+          "[ \"$EXIT_CODE\" != \"0\" ] && OUTCOME=\"mechanical-failure\"",
+          "echo \"{\\\"command\\\":$(echo \\\"$COMMAND\\\" | jq -Rs .),\\\"outcome\\\":\\\"$OUTCOME\\\",\\\"duration_ms\\\":0}\" | agentic-feedback record",
+          "exit 0",
+        ].join("\n"),
+        timeoutSec: 10,
+      },
+    ],
+  },
+};
+
+const COPILOT_SETUP_STEPS_YML = `# copilot-setup-steps.yml
+# Installs agentic-feedback in the Copilot coding agent's sandbox runner.
+# Place this file at the root of your repository.
+steps:
+  - name: Install agentic-feedback
+    run: npm install -g agentic-feedback
+`;
+
 // ─── Generic shell wrapper template ───────────────────────────────────────
 
 const GENERIC_WRAP_SH = `#!/bin/bash
@@ -254,6 +315,9 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       break;
     case "generic":
       await installGeneric(cwd, options, result);
+      break;
+    case "copilot":
+      await installCopilot(cwd, options, result);
       break;
   }
 
@@ -335,6 +399,18 @@ async function installGeneric(
   const binDir = resolve(cwd, "bin");
   await ensureDir(binDir, options, result);
   await writeScript(join(binDir, "wrap-exec.sh"), GENERIC_WRAP_SH, options, result);
+}
+
+async function installCopilot(
+  cwd: string,
+  options: InstallOptions,
+  result: InstallResult,
+): Promise<void> {
+  const hooksDir = join(cwd, ".github", "hooks");
+  await ensureDir(hooksDir, options, result);
+  await patchSettings(join(hooksDir, "preflight.json"), COPILOT_PREFLIGHT_JSON, options, result);
+  await patchSettings(join(hooksDir, "record.json"), COPILOT_RECORD_JSON, options, result);
+  await writeScript(join(cwd, "copilot-setup-steps.yml"), COPILOT_SETUP_STEPS_YML, options, result);
 }
 
 // ─── File helpers ──────────────────────────────────────────────────────────

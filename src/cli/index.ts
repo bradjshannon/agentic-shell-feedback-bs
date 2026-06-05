@@ -19,7 +19,7 @@ Commands:
   export            Export registry as JSON (stdout)
   import            Import patterns from JSON file (read from stdin)
   install           Install hooks for your coding agent
-                    Options: --agent claude-code|cursor|cline|openhands|generic (default: claude-code)
+                    Options: --agent claude-code|cursor|cline|openhands|copilot|generic (default: claude-code)
                              --global  Install to home directory instead of current project
                              --dry-run Show what would be created without writing files
 
@@ -216,7 +216,7 @@ async function cmdInstall(
   rest: string[],
   flags: Record<string, string | boolean>,
 ): Promise<void> {
-  const validAgents: AgentTarget[] = ["claude-code", "cursor", "cline", "openhands", "generic"];
+  const validAgents: AgentTarget[] = ["claude-code", "cursor", "cline", "openhands", "generic", "copilot"];
   const agentFlag = flags["--agent"] as string | undefined;
   if (agentFlag !== undefined && !validAgents.includes(agentFlag as AgentTarget)) {
     console.error(`install: unknown agent "${agentFlag}". Valid: ${validAgents.join(", ")}`);
@@ -249,6 +249,11 @@ async function cmdInstall(
     console.log(`\nInstalled agentic-feedback hooks for ${result.agent}.`);
     if (result.agent === "claude-code") {
       console.log("Verify with /hooks inside a Claude Code session.");
+      console.log("Note: VS Code Copilot agent mode uses the same hooks format — no extra install needed.");
+    }
+    if (result.agent === "copilot") {
+      console.log("Copilot cloud agent hooks written to .github/hooks/.");
+      console.log("Commit copilot-setup-steps.yml to install agentic-feedback in the sandbox runner.");
     }
   }
 }
