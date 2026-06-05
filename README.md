@@ -38,6 +38,8 @@ agentic-feedback install --dry-run
 
 The `install` command creates the hook scripts and wires them into the agent's config automatically. See [Installing for Your Agent](#installing-for-your-agent) for per-agent details.
 
+**Installing for multiple agents is safe.** Each agent writes to its own directory (`.claude/`, `.cursor/`, `.clinerules/`, `.openhands/`, `.github/hooks/`) — they never overlap. Running `install` twice for the same agent is also safe: settings files are merged rather than overwritten, so existing config is preserved and hook entries are never duplicated. All agents share a single pattern store (`~/.agentic-feedback/` by default), so failures learned by one agent automatically protect all the others.
+
 ---
 
 ## Integrating with Agents
@@ -314,6 +316,21 @@ const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
 ---
 
 ## Installing for Your Agent
+
+You can install for multiple agents in the same project — each uses a separate config directory and they never conflict. All agents share a single pattern store, so learned failures protect every agent automatically.
+
+| Agent | Config location | Conflicts with others? |
+|-------|----------------|------------------------|
+| `claude-code` | `.claude/` | No |
+| `cursor` | `.cursor/` | No |
+| `cline` | `.clinerules/` | No |
+| `openhands` | `.openhands/` | No |
+| `copilot` | `.github/hooks/` | No |
+| `generic` | `bin/` | No |
+
+Repeated installs for the same agent are also safe — settings files are merged and scripts are overwritten in place, so nothing accumulates.
+
+---
 
 ### Claude Code
 
