@@ -14,6 +14,31 @@ AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShel
 
 ---
 
+## Quick Install
+
+```bash
+npm install -g agentic-feedback
+
+# Claude Code (default)
+agentic-feedback install
+
+# Other agents
+agentic-feedback install --agent cursor
+agentic-feedback install --agent cline
+agentic-feedback install --agent openhands
+agentic-feedback install --agent generic   # shell wrapper, works with any agent
+
+# Install globally (affects all your projects)
+agentic-feedback install --global
+
+# Preview without writing files
+agentic-feedback install --dry-run
+```
+
+The `install` command creates the hook scripts and wires them into the agent's config automatically. See [Installing for Your Agent](#installing-for-your-agent) for per-agent details.
+
+---
+
 ## Integrating with Agents
 
 There are three integration patterns depending on your setup.
@@ -287,6 +312,156 @@ const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
 
 ---
 
+## Installing for Your Agent
+
+### Claude Code
+
+```bash
+agentic-feedback install
+# or globally (all projects):
+agentic-feedback install --global
+```
+
+Creates:
+- `.claude/hooks/preflight.sh` — blocks known-bad commands (exit 2)
+- `.claude/hooks/record.sh` — logs every outcome
+- `.claude/settings.json` — wires hooks to `PreToolUse`, `PostToolUse`, and `Stop`
+
+Verify with `/hooks` inside a Claude Code session. Try a blocked command:
+```
+> Run: ssh host << 'EOF'\necho hi\nEOF
+```
+Claude should see the block and self-correct to a safe alternative.
+
+---
+
+### Cursor
+
+Cursor (v1.7+) supports `beforeShellExecution` and `afterShellExecution` hooks via `.cursor/hooks.json`.
+
+```bash
+agentic-feedback install --agent cursor
+```
+
+Creates:
+- `.cursor/hooks/preflight.sh` — reads `$CURSOR_COMMAND`, exits non-zero to block
+- `.cursor/hooks/record-cursor.sh` — records outcome via `$CURSOR_COMMAND` / `$CURSOR_EXIT_CODE`
+- `.cursor/hooks.json` — wires both hooks
+
+**Note:** Cursor hooks require Cursor v1.7 or later. Use `--global` to install to `~/.cursor/` and affect all projects.
+
+---
+
+### Cline
+
+Cline (v3.36+, macOS/Linux only) runs scripts from `.clinerules/hooks/` named after the event.
+
+```bash
+agentic-feedback install --agent cline
+```
+
+Creates:
+- `.clinerules/hooks/beforeShellExecution` — reads `$CLINE_COMMAND`, writes `{"cancel": true}` to block
+
+**Note:** Cline hooks are only available on macOS and Linux. The hook must output JSON to stdout; any non-zero exit or `{"cancel": true}` blocks the command.
+
+---
+
+### OpenHands
+
+OpenHands uses the same hook format as Claude Code (`.openhands/hooks.json`).
+
+```bash
+agentic-feedback install --agent openhands
+```
+
+Creates:
+- `.openhands/hooks/preflight.sh`
+- `.openhands/hooks/record.sh`
+- `.openhands/hooks.json` — wires `PreToolUse` / `PostToolUse` for the `Bash` tool
+
+---
+
+### Aider / SWE-agent / any agent without native hooks
+
+Use the generic shell wrapper — a drop-in replacement for your agent's shell executor:
+
+```bash
+agentic-feedback install --agent generic
+```
+
+Creates `bin/wrap-exec.sh`. Configure your agent to use it instead of running commands directly:
+
+```bash
+# Aider
+aider --shell bin/wrap-exec.sh
+
+# SWE-agent: set your tool bundle's shell_cmd to wrap-exec.sh
+
+# Any subprocess-based agent
+SHELL=bin/wrap-exec.sh my-agent run
+```
+
+The wrapper runs preflight before execution and records the outcome afterwards. Run `agentic-feedback learn` at the end of each session (or add a cron job).
+
+---
+
+### Continue.dev CLI
+
+Continue.dev CLI (March 2026+) supports `.continue/hooks.json`. Documentation is still incomplete; the format mirrors Claude Code hooks.
+
+```bash
+mkdir -p .continue
+agentic-feedback export > /dev/null  # ensure registry exists
+# Then manually copy .claude/settings.json → .continue/hooks.json
+# and update script paths to use full paths
+```
+
+---
+
+### MCP-compatible agents
+
+For agents that expose an MCP `bash`/`shell` tool, wrap the tool at the server level using the TypeScript API:
+
+```typescript
+import { LearningLoop } from "agentic-feedback";
+
+const loop = new LearningLoop();
+
+// In your MCP tool handler for "bash":
+server.tool("bash", async ({ command }) => {
+  const check = await loop.preflight(command);
+  if (!check.allowed) {
+    return { error: `Blocked: ${check.reason}. Try: ${check.requiredAlternative}` };
+  }
+  const start = Date.now();
+  try {
+    const output = await runShell(command);
+    await loop.record({ command, context: loop.analyze(command), outcome: "success", duration_ms: Date.now() - start });
+    return { output };
+  } catch (err) {
+    await loop.record({ command, context: loop.analyze(command), outcome: "mechanical-failure", duration_ms: Date.now() - start });
+    throw err;
+  }
+});
+```
+
+---
+
+### Sharing patterns across agents and machines
+
+```bash
+# Export learned patterns and commit them
+agentic-feedback export > .agentic-feedback/patterns.json
+
+# On a new machine or CI container, seed from the export
+agentic-feedback import < .agentic-feedback/patterns.json
+```
+
+All agents reading from the same `storageDir` (or seeded from the same export) share pattern history automatically.
+
+---
+
 ## Quick Start
 
 ```typescript
@@ -422,6 +597,15 @@ const loop = new LearningLoop({
 ## CLI
 
 ```bash
+# Install hooks for your agent (default: claude-code)
+agentic-feedback install
+agentic-feedback install --agent cursor
+agentic-feedback install --agent cline
+agentic-feedback install --agent openhands
+agentic-feedback install --agent generic
+agentic-feedback install --global            # install to home dir
+agentic-feedback install --dry-run           # preview without writing
+
 # Check a command
 agentic-feedback preflight "ssh user@host 'echo hi'" --shell powershell --target remote-ssh
 
