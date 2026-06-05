@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, chmod } from "node:fs/promises";
+import { mkdir, writeFile, readFile, chmod, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -662,4 +662,132 @@ function deepMerge(
     }
   }
   return out;
+}
+
+// ─── Live install detection ────────────────────────────────────────────────
+
+export async function checkInstalled(
+  agent: AgentTarget,
+  scope: "global" | "repo",
+  cwd: string,
+): Promise<boolean> {
+  const home = homedir();
+  const base = scope === "global" ? home : cwd;
+  const p = primaryHookPath(agent, scope, base, cwd);
+  if (!p) return false;
+  try { await readFile(p); return true; } catch { return false; }
+}
+
+function primaryHookPath(
+  agent: AgentTarget,
+  scope: "global" | "repo",
+  base: string,
+  cwd: string,
+): string | null {
+  switch (agent) {
+    case "claude-code": return join(base, ".claude", "hooks", "preflight.sh");
+    case "cursor":      return join(base, ".cursor", "hooks", "preflight.sh");
+    case "cline":       return scope === "global" ? null : join(cwd, ".clinerules", "hooks", "beforeShellExecution");
+    case "openhands":   return scope === "global" ? null : join(cwd, ".openhands", "hooks", "preflight.sh");
+    case "copilot":     return scope === "global" ? null : join(cwd, ".github", "hooks", "preflight.json");
+    case "generic":     return scope === "global" ? null : join(cwd, "bin", "wrap-exec.sh");
+  }
+}
+
+// ─── Uninstall ─────────────────────────────────────────────────────────────
+
+export async function uninstall(
+  agent: AgentTarget,
+  scope: "global" | "repo",
+  cwd: string,
+): Promise<void> {
+  const home = homedir();
+  const base = scope === "global" ? home : cwd;
+
+  async function tryDel(dir: string, files: string[]): Promise<void> {
+    await Promise.all(files.map((f) => unlink(join(dir, f)).catch(() => undefined)));
+  }
+
+  switch (agent) {
+    case "claude-code": {
+      const hooksDir = join(base, ".claude", "hooks");
+      await tryDel(hooksDir, ["preflight.sh", "record.sh", "session-start.sh", "stop-worktree.sh", "stop-remote.sh"]);
+      await cleanJsonHooks(join(base, ".claude", "settings.json"));
+      break;
+    }
+    case "cursor": {
+      const hooksDir = join(base, ".cursor", "hooks");
+      await tryDel(hooksDir, ["preflight.sh", "record-cursor.sh"]);
+      await cleanCursorHooks(join(base, ".cursor", "hooks.json"));
+      break;
+    }
+    case "cline":
+      if (scope === "repo") await tryDel(join(cwd, ".clinerules", "hooks"), ["beforeShellExecution"]);
+      break;
+    case "openhands":
+      if (scope === "repo") {
+        await tryDel(join(cwd, ".openhands", "hooks"), ["preflight.sh", "record.sh"]);
+        await cleanJsonHooks(join(cwd, ".openhands", "hooks.json"));
+      }
+      break;
+    case "copilot":
+      if (scope === "repo") await tryDel(join(cwd, ".github", "hooks"), ["preflight.json", "record.json"]);
+      break;
+    case "generic":
+      if (scope === "repo") await tryDel(join(cwd, "bin"), ["wrap-exec.sh"]);
+      break;
+  }
+}
+
+async function cleanJsonHooks(settingsPath: string): Promise<void> {
+  let raw: string;
+  try { raw = await readFile(settingsPath, "utf8"); } catch { return; }
+  let obj: Record<string, unknown>;
+  try { obj = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
+
+  const hooks = obj["hooks"] as Record<string, unknown[]> | undefined;
+  if (!hooks) return;
+
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    hooks[event] = arr
+      .map((e: unknown) => {
+        const entry = e as { hooks?: Array<{ command?: string }> };
+        if (!Array.isArray(entry.hooks)) return e;
+        return { ...entry, hooks: entry.hooks.filter((h) => !isOurCommand(h.command ?? "")) };
+      })
+      .filter((e: unknown) => {
+        const entry = e as { hooks?: unknown[] };
+        return !Array.isArray(entry.hooks) || entry.hooks.length > 0;
+      });
+    if ((hooks[event] as unknown[]).length === 0) delete hooks[event];
+  }
+
+  if (Object.keys(hooks).length === 0) delete obj["hooks"];
+  await writeFile(settingsPath, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+async function cleanCursorHooks(hooksJsonPath: string): Promise<void> {
+  let raw: string;
+  try { raw = await readFile(hooksJsonPath, "utf8"); } catch { return; }
+  let obj: Record<string, unknown>;
+  try { obj = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
+  for (const key of ["beforeShellExecution", "afterShellExecution"]) {
+    const entry = obj[key] as { command?: string } | undefined;
+    if (entry?.command && isOurCommand(entry.command)) delete obj[key];
+  }
+  await writeFile(hooksJsonPath, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+function isOurCommand(command: string): boolean {
+  return (
+    command.includes("agentic-feedback") ||
+    /\/hooks\/preflight\.sh/.test(command) ||
+    /\/hooks\/record\.sh/.test(command) ||
+    /\/hooks\/record-cursor\.sh/.test(command) ||
+    /\/hooks\/session-start\.sh/.test(command) ||
+    /\/hooks\/stop-worktree\.sh/.test(command) ||
+    /\/hooks\/stop-remote\.sh/.test(command)
+  );
 }
