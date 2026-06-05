@@ -1,8 +1,9 @@
 import { homedir } from "node:os";
 import { LearningLoop } from "../LearningLoop.js";
-import { install } from "../installer/index.js";
+import { install, checkInstalled, uninstall } from "../installer/index.js";
 import { computeMetrics } from "../eval/Metrics.js";
 import type { AgentTarget } from "../installer/index.js";
+import type { FailurePattern } from "../types.js";
 
 // ─── ANSI helpers ──────────────────────────────────────────────────────────
 
@@ -40,40 +41,38 @@ function hr(width: number): string {
 
 // ─── State ─────────────────────────────────────────────────────────────────
 
-type Screen = "menu" | "install" | "preflight" | "report" | "learn" | "export" | "import";
-type Section = "left" | "right" | "cmd" | "run";
+type Screen = "menu" | "manage-install" | "patterns" | "preflight" | "report" | "learn" | "export" | "import";
 
-const AGENTS: AgentTarget[] = ["claude-code", "cursor", "cline", "openhands", "copilot", "generic"];
 const SHELLS = ["auto-detect", "bash", "zsh", "sh", "powershell", "cmd", "fish"];
 const TARGETS = ["auto-detect", "local", "remote-ssh", "remote-other"];
 
-const AGENT_HINTS: Record<string, string> = {
-  "claude-code": "Hooks via .claude/settings.json (exit-code 2 blocking)",
-  cursor: "Hooks via .cursor/hooks.json (beforeShellExecution)",
-  cline: "Hooks via .clinerules/hooks/ (cancel JSON, macOS/Linux only)",
-  openhands: "Hooks via .openhands/hooks.json (Claude Code format)",
-  copilot: "Hooks via .github/hooks/*.json (inline bash, JSON deny)",
-  generic: "Drop-in shell wrapper at bin/wrap-exec.sh",
-};
+interface ManageEntry {
+  agent: AgentTarget;
+  scope: "global" | "repo";
+  hint: string[];
+  installed: boolean;
+  selected: boolean;
+}
 
 interface State {
   screen: Screen;
   // menu
   menuIdx: number;
-  // install
-  installAgentIdx: number;
-  installSection: Section;
-  installFlagIdx: number;
-  installGlobal: boolean;
-  installRemote: boolean;
-  installPush: boolean;
-  installDryRun: boolean;
+  // manage-install
+  manageEntries: ManageEntry[];
+  manageIdx: number;
+  manageSection: "list" | "run";
+  manageLoaded: boolean;
+  // patterns
+  patternsData: FailurePattern[];
+  patternIdx: number;
+  patternsLoaded: boolean;
+  pendingAction: "delete-pattern" | "toggle-pattern" | null;
   // preflight
   preflightCmd: string;
   preflightShellIdx: number;
   preflightTargetIdx: number;
   preflightSection: "cmd" | "shell" | "target" | "run";
-  // learn
   // export/import
   ioPath: string;
   ioSection: "path" | "run";
@@ -83,17 +82,31 @@ interface State {
   reportData: string[];
 }
 
+// ─── Install matrix ────────────────────────────────────────────────────────
+
+const INSTALL_MATRIX: Array<{ agent: AgentTarget; scope: "global" | "repo"; hint: string[] }> = [
+  { agent: "claude-code", scope: "global", hint: ["Claude Code hooks for all projects.", "Also covers VS Code Copilot agent mode.", "", "Writes to:  ~/.claude/hooks/", "Config:     ~/.claude/settings.json"] },
+  { agent: "claude-code", scope: "repo",   hint: ["Claude Code hooks for this project only.", "Also covers VS Code Copilot agent mode.", "", "Writes to:  .claude/hooks/", "Config:     .claude/settings.json"] },
+  { agent: "cursor",      scope: "global", hint: ["Cursor hooks for all projects.", "Requires Cursor v1.7+.", "", "Writes to:  ~/.cursor/hooks/", "Config:     ~/.cursor/hooks.json"] },
+  { agent: "cursor",      scope: "repo",   hint: ["Cursor hooks for this project only.", "Requires Cursor v1.7+.", "", "Writes to:  .cursor/hooks/", "Config:     .cursor/hooks.json"] },
+  { agent: "cline",       scope: "repo",   hint: ["Cline hooks for this project.", "Requires Cline v3.36+. macOS/Linux only.", "", "Writes to:  .clinerules/hooks/"] },
+  { agent: "openhands",   scope: "repo",   hint: ["OpenHands hooks for this project.", "Same format as Claude Code.", "", "Writes to:  .openhands/hooks/", "Config:     .openhands/hooks.json"] },
+  { agent: "copilot",     scope: "repo",   hint: ["GitHub Copilot cloud agent hooks.", "Not for VS Code — use claude-code for that.", "", "Writes to:  .github/hooks/", "Creates:    copilot-setup-steps.yml"] },
+  { agent: "generic",     scope: "repo",   hint: ["Generic shell wrapper (Aider, SWE-agent...)", "No native hook support needed.", "", "Writes to:  bin/wrap-exec.sh"] },
+];
+
 function initialState(): State {
   return {
     screen: "menu",
     menuIdx: 0,
-    installAgentIdx: 0,
-    installSection: "left",
-    installFlagIdx: 0,
-    installGlobal: false,
-    installRemote: false,
-    installPush: false,
-    installDryRun: false,
+    manageEntries: INSTALL_MATRIX.map((m) => ({ ...m, installed: false, selected: false })),
+    manageIdx: 0,
+    manageSection: "list",
+    manageLoaded: false,
+    patternsData: [],
+    patternIdx: 0,
+    patternsLoaded: false,
+    pendingAction: null,
     preflightCmd: "",
     preflightShellIdx: 0,
     preflightTargetIdx: 0,
@@ -110,23 +123,41 @@ function initialState(): State {
 
 const MENU_ITEMS = [
   {
-    label: "Install Hooks",
-    key: "install" as Screen,
+    label: "Configure Agents",
+    key: "manage-install" as Screen,
     desc: [
-      "Create hook scripts and wire them into",
-      "your coding agent's config file.",
+      "Install or remove hooks for each agent",
+      "and scope via a live checkbox matrix.",
       "",
-      "Hooks intercept every shell command:",
-      "  PreToolUse  — block known-bad patterns",
-      "  PostToolUse — record outcomes",
-      "  Stop        — run learn() at session end",
+      "Checks disk for existing installations.",
+      "Toggle checkboxes, then Apply.",
+      "",
+      "↑ = will install   ↓ = will uninstall",
       "",
       "Supported agents:",
       "  claude-code  cursor  cline",
       "  openhands  copilot  generic",
       "",
-      "Flags: --global  --remote  --push",
-      "       --dry-run (preview only)",
+      "Scopes: global (home dir) or repo (cwd)",
+    ],
+  },
+  {
+    label: "Manage Patterns",
+    key: "patterns" as Screen,
+    desc: [
+      "Review all learned failure patterns.",
+      "",
+      "Status badges:",
+      "  [B] blocking  — blocks the command",
+      "  [A] advisory  — warns only",
+      "  [E] expired   — inactive",
+      "",
+      "Actions:",
+      "  b  toggle advisory ↔ blocking",
+      "  d  delete the pattern",
+      "",
+      "Detail panel shows signature,",
+      "approach, alternative, and stats.",
     ],
   },
   {
@@ -318,33 +349,60 @@ function renderMenu(state: State): void {
   renderFooter(["↑↓ Navigate", "Enter Select", "q Quit"]);
 }
 
-// ─── Screen: Install ───────────────────────────────────────────────────────
+// ─── Screen: Manage Install ────────────────────────────────────────────────
 
-function renderInstall(state: State): void {
-  const { innerW, innerH } = renderFrame("Install Hooks");
-  const leftW = Math.floor(innerW / 2) - 2;
+function renderManageInstall(state: State): void {
+  const { innerW, innerH } = renderFrame("Configure Agents");
+  const leftW = 38;
   const rightW = innerW - leftW - 3;
   const bodyRows = innerH - 2;
 
-  const FLAGS = [
-    { key: "installGlobal" as const, label: "--global", hint: "Install to home dir (all projects)" },
-    { key: "installRemote" as const, label: "--remote", hint: "SessionStart + worktree Stop hook" },
-    { key: "installPush" as const, label: "--push", hint: "Also git commit+push patterns (implies --remote)" },
-    { key: "installDryRun" as const, label: "--dry-run", hint: "Preview without writing files" },
-  ];
+  if (!state.manageLoaded) {
+    // Show loading state centered
+    for (let r = 0; r < bodyRows; r++) {
+      if (r === Math.floor(bodyRows / 2)) {
+        const msg = A.yellow + "  Loading..." + A.reset;
+        const msgLen = "  Loading...".length;
+        const p = Math.floor((innerW - msgLen) / 2);
+        renderLine(0, " ".repeat(p) + A.yellow + "Loading..." + A.reset, innerW);
+      } else {
+        renderLine(0, "", innerW);
+      }
+    }
+    write(A.cyan + B.bl + hr(innerW) + B.br + A.reset + "\n");
+    renderFooter(["Loading..."]);
+    return;
+  }
 
-  const agentHint = AGENT_HINTS[AGENTS[state.installAgentIdx] ?? "claude-code"] ?? "";
+  const focusedEntry = state.manageEntries[state.manageIdx];
+  const pendingCount = state.manageEntries.filter((e) => e.selected !== e.installed).length;
 
   for (let r = 0; r < bodyRows; r++) {
-    if (r === bodyRows - 2) {
-      // Output header
-      const line = `  ${A.dim}Output${A.reset}`;
-      renderLine(0, line, innerW);
+    if (r === bodyRows - 4) {
+      // Apply button
+      const focused = state.manageSection === "run";
+      let btn: string;
+      if (pendingCount > 0) {
+        btn = focused
+          ? `${A.bgCyan}${A.bold}  Apply (${pendingCount} change${pendingCount !== 1 ? "s" : ""})  ${A.reset}`
+          : `  [ Apply (${pendingCount} change${pendingCount !== 1 ? "s" : ""}) ]  `;
+      } else {
+        btn = A.dim + "  Nothing to apply  " + A.reset;
+      }
+      const btnPlain = btn.replace(/\x1b\[[0-9;]*m/g, "");
+      const p = Math.floor((innerW - btnPlain.length) / 2);
+      renderLine(0, " ".repeat(p) + btn, innerW);
       continue;
     }
+
+    if (r === bodyRows - 2) {
+      renderLine(0, A.dim + "  Output" + A.reset, innerW);
+      continue;
+    }
+
     if (r === bodyRows - 1) {
       const line = state.status === "loading"
-        ? `  ${A.yellow}Running...${A.reset}`
+        ? `  ${A.yellow}Applying...${A.reset}`
         : state.output.length > 0
           ? `  ${state.status === "error" ? A.red : A.green}${state.output[state.output.length - 1] ?? ""}${A.reset}`
           : `  ${A.dim}(results will appear here)${A.reset}`;
@@ -356,44 +414,64 @@ function renderInstall(state: State): void {
     let right = "";
 
     if (r === 0) {
-      left = A.dim + "  Agent" + A.reset;
-      right = A.dim + "  Flags" + A.reset;
+      left = A.dim + "  Agent / Scope" + A.reset;
+      right = A.dim + "  About" + A.reset;
     } else if (r === 1) {
       left = A.dim + "  " + hr(leftW - 2) + A.reset;
       right = A.dim + "  " + hr(rightW - 2) + A.reset;
-    } else if (r >= 2 && r - 2 < AGENTS.length) {
-      const i = r - 2;
-      const agent = AGENTS[i]!;
-      const active = i === state.installAgentIdx;
-      const focused = state.installSection === "left";
-      const bullet = active ? (focused ? A.bold + A.cyan + "  ◉ " : A.bold + "  ◉ ") : "  ○ ";
-      left = bullet + (active ? A.bold : "") + agent + A.reset;
-      if (active) left += A.dim + "\n" + A.reset; // shown below, not here
-    } else if (r === AGENTS.length + 2) {
-      left = A.dim + "  " + agentHint.slice(0, leftW - 2) + A.reset;
-    }
+    } else {
+      const entryIdx = r - 2;
+      if (entryIdx < state.manageEntries.length) {
+        const entry = state.manageEntries[entryIdx]!;
+        const focused = state.manageSection === "list" && entryIdx === state.manageIdx;
+        const prefix = focused ? A.bold + A.cyan + "▶ " + A.reset : "  ";
+        const checkbox = entry.selected ? A.green + "[✓]" + A.reset : "[ ]";
+        const label = `${entry.agent} / ${entry.scope}`;
 
-    if (r >= 2 && r - 2 < FLAGS.length) {
-      const fi = r - 2;
-      const f = FLAGS[fi]!;
-      const checked = state[f.key];
-      const focused = state.installSection === "right" && state.installFlagIdx === fi;
-      const box = checked ? A.green + " ✓ " : "   ";
-      const label = focused ? A.bold + A.cyan + f.label + A.reset : f.label;
-      right = "  " + box + A.reset + label + A.reset;
-      if (focused) right += `  ${A.dim}${f.hint}${A.reset}`;
-    }
+        // Status indicator: ● installed, ○ not installed
+        const dot = entry.installed ? A.green + "●" + A.reset : A.dim + "○" + A.reset;
 
-    if (r === bodyRows - 4) {
-      // Run button row
-      const focused = state.installSection === "run";
-      const btn = focused
-        ? `${A.bgCyan}${A.bold}  Install  ${A.reset}`
-        : `  [ Install ]  `;
-      const btnPlain = btn.replace(/\x1b\[[0-9;]*m/g, "");
-      const pad2 = Math.floor((innerW - btnPlain.length) / 2);
-      renderLine(0, " ".repeat(pad2) + btn, innerW);
-      continue;
+        // Change indicator
+        let changeIndicator = "";
+        if (entry.selected && !entry.installed) {
+          changeIndicator = " " + A.cyan + "↑" + A.reset;
+        } else if (!entry.selected && entry.installed) {
+          changeIndicator = " " + A.yellow + "↓" + A.reset;
+        }
+
+        left = prefix + checkbox + " " + label + "   " + dot + changeIndicator;
+
+        // Right panel: hint lines or pending changes summary
+        if (state.manageSection === "run") {
+          // Show pending changes summary
+          const changes = state.manageEntries.filter((e) => e.selected !== e.installed);
+          if (r - 2 === 0) {
+            right = A.dim + "  Pending changes:" + A.reset;
+          } else if (r - 2 === 1) {
+            right = A.dim + "  " + hr(rightW - 4) + A.reset;
+          } else {
+            const ci = r - 4;
+            if (ci >= 0 && ci < changes.length) {
+              const c = changes[ci]!;
+              if (c.selected && !c.installed) {
+                right = "  " + A.cyan + `+ ${c.agent} / ${c.scope}` + A.reset;
+              } else {
+                right = "  " + A.yellow + `- ${c.agent} / ${c.scope}` + A.reset;
+              }
+            }
+          }
+        } else {
+          // Show focused entry's hint
+          if (focusedEntry) {
+            const hi = r - 2;
+            right = hi < focusedEntry.hint.length ? "  " + focusedEntry.hint[hi]! : "";
+          }
+        }
+      } else if (focusedEntry && state.manageSection === "list") {
+        // Extra hint lines below the list
+        const hi = r - 2;
+        right = hi < focusedEntry.hint.length ? "  " + focusedEntry.hint[hi]! : "";
+      }
     }
 
     const leftPadded = pad(left, leftW);
@@ -403,7 +481,124 @@ function renderInstall(state: State): void {
   }
 
   write(A.cyan + B.bl + hr(innerW) + B.br + A.reset + "\n");
-  renderFooter(["↑↓ Navigate", "Tab Switch section", "Space Toggle flag", "Enter Run", "Esc Back"]);
+  renderFooter(["↑↓ Navigate", "Space Toggle", "Tab Switch section", "Enter Apply", "Esc Back"]);
+}
+
+// ─── Screen: Patterns ─────────────────────────────────────────────────────
+
+function renderPatterns(state: State): void {
+  const { innerW, innerH } = renderFrame("Manage Patterns");
+  const leftW = 40;
+  const rightW = innerW - leftW - 3;
+  const bodyRows = innerH - 2;
+
+  if (!state.patternsLoaded) {
+    for (let r = 0; r < bodyRows; r++) {
+      if (r === Math.floor(bodyRows / 2)) {
+        const msgLen = "Loading...".length;
+        const p = Math.floor((innerW - msgLen) / 2);
+        renderLine(0, " ".repeat(p) + A.yellow + "Loading..." + A.reset, innerW);
+      } else {
+        renderLine(0, "", innerW);
+      }
+    }
+    write(A.cyan + B.bl + hr(innerW) + B.br + A.reset + "\n");
+    renderFooter(["Loading..."]);
+    return;
+  }
+
+  const patterns = state.patternsData;
+  const focused = patterns[state.patternIdx];
+
+  for (let r = 0; r < bodyRows; r++) {
+    if (r === bodyRows - 2) {
+      renderLine(0, A.dim + "  Output" + A.reset, innerW);
+      continue;
+    }
+
+    if (r === bodyRows - 1) {
+      const line = state.output.length > 0
+        ? `  ${state.status === "error" ? A.red : A.green}${state.output[state.output.length - 1] ?? ""}${A.reset}`
+        : `  ${A.dim}d=delete  b=toggle advisory/blocking${A.reset}`;
+      renderLine(0, line, innerW);
+      continue;
+    }
+
+    let left = "";
+    let right = "";
+
+    if (r === 0) {
+      left = A.dim + `  Patterns (${patterns.length})` + A.reset;
+      right = focused ? A.dim + "  Detail" + A.reset : "";
+    } else if (r === 1) {
+      left = A.dim + "  " + hr(leftW - 2) + A.reset;
+      right = focused ? A.dim + "  " + hr(rightW - 4) + A.reset : "";
+    } else {
+      const pi = r - 2;
+      if (pi < patterns.length) {
+        const p = patterns[pi]!;
+        const isFocused = pi === state.patternIdx;
+        const prefix = isFocused ? A.bold + A.cyan + "▶ " + A.reset : "  ";
+
+        // Status badge
+        let badge: string;
+        if (p.status === "blocking") badge = A.red + "[B]" + A.reset;
+        else if (p.status === "advisory") badge = A.yellow + "[A]" + A.reset;
+        else badge = A.dim + "[E]" + A.reset;
+
+        // Truncate signature to fit
+        const maxSigLen = leftW - 14; // prefix(2) + badge(3) + space(1) + count(4) + padding
+        const sig = p.signature.length > maxSigLen
+          ? p.signature.slice(0, maxSigLen - 1) + "…"
+          : p.signature;
+
+        // Occurrence count right-aligned
+        const countStr = `${p.occurrences}×`;
+        const sigPad = leftW - 2 - 3 - 1 - countStr.length - 2; // subtract prefix, badge, spaces
+        const sigFitted = sig.length > sigPad ? sig.slice(0, sigPad - 1) + "…" : sig.padEnd(sigPad);
+
+        left = prefix + badge + " " + sigFitted + " " + A.dim + countStr + A.reset;
+      } else if (patterns.length === 0 && r === 2) {
+        left = A.dim + "  No patterns learned yet." + A.reset;
+      }
+
+      // Right panel: detail for focused pattern
+      if (focused) {
+        const detailLines: string[] = [
+          // r=2: status line
+          focused.status === "blocking"
+            ? A.red + "  Status: BLOCKING" + A.reset
+            : focused.status === "advisory"
+              ? A.yellow + "  Status: ADVISORY" + A.reset
+              : A.dim + "  Status: EXPIRED" + A.reset,
+          // r=3: separator
+          A.dim + "  " + hr(rightW - 4) + A.reset,
+          // r=4+: details
+          "  " + A.dim + "Sig: " + A.reset + focused.signature.slice(0, rightW - 8),
+          focused.signature.length > rightW - 8
+            ? "       " + focused.signature.slice(rightW - 8, rightW - 8 + rightW - 9)
+            : "",
+          "  " + A.dim + "Approach: " + A.reset + focused.failedApproach.slice(0, rightW - 12),
+          "  " + A.dim + "Use: " + A.reset + focused.successfulAlternative.slice(0, rightW - 8),
+          "",
+          `  ${A.dim}${focused.occurrences}× seen,${A.reset} ${(focused.wasted_ms / 60000).toFixed(1)} min wasted`,
+          `  ${A.dim}First: ${focused.firstSeen.slice(0, 10)}  Last: ${focused.lastSeen.slice(0, 10)}${A.reset}`,
+        ];
+        const di = r - 2;
+        if (di >= 0 && di < detailLines.length) {
+          right = detailLines[di] ?? "";
+        }
+      }
+    }
+
+    const leftPadded = pad(left, leftW);
+    const sep = A.cyan + " " + B.v + A.reset + " ";
+    const rightPadded = pad(right, rightW);
+    write(A.cyan + B.v + A.reset + leftPadded + sep + rightPadded + A.cyan + B.v + A.reset + "\n");
+  }
+
+  write(A.cyan + B.bl + hr(innerW) + B.br + A.reset + "\n");
+  renderFooter(["↑↓ Navigate", "d Delete", "b Toggle status", "Esc Back"]);
 }
 
 // ─── Screen: Preflight ─────────────────────────────────────────────────────
@@ -446,7 +641,6 @@ function renderPreflight(state: State): void {
       let tl = "";
       if (si < SHELLS.length) {
         const active = si === state.preflightShellIdx;
-        const focused = shellFocused && active;
         sl = "  " + (active ? (shellFocused ? A.cyan + A.bold + "◉ " : A.bold + "◉ ") : "○ ") + (active ? A.bold : "") + SHELLS[si]! + A.reset;
       }
       if (si < TARGETS.length) {
@@ -621,41 +815,18 @@ function renderIO(state: State, isExport: boolean): void {
 
 function render(state: State): void {
   switch (state.screen) {
-    case "menu":     renderMenu(state); break;
-    case "install":  renderInstall(state); break;
-    case "preflight": renderPreflight(state); break;
-    case "report":   renderReport(state); break;
-    case "learn":    renderLearn(state); break;
-    case "export":   renderIO(state, true); break;
-    case "import":   renderIO(state, false); break;
+    case "menu":           renderMenu(state); break;
+    case "manage-install": renderManageInstall(state); break;
+    case "patterns":       renderPatterns(state); break;
+    case "preflight":      renderPreflight(state); break;
+    case "report":         renderReport(state); break;
+    case "learn":          renderLearn(state); break;
+    case "export":         renderIO(state, true); break;
+    case "import":         renderIO(state, false); break;
   }
 }
 
 // ─── Actions ───────────────────────────────────────────────────────────────
-
-async function runInstall(state: State): Promise<State> {
-  const agent = AGENTS[state.installAgentIdx] ?? "claude-code";
-  const opts = {
-    agent,
-    global: state.installGlobal,
-    remote: state.installRemote,
-    push: state.installPush,
-    dryRun: state.installDryRun,
-    cwd: process.cwd(),
-  };
-  try {
-    const result = await install(opts);
-    const lines: string[] = [];
-    if (result.dryRun) lines.push("Dry run — no files written.");
-    lines.push(...result.filesWritten.map((f) => "✓ " + f));
-    lines.push(...result.filesPatched.map((f) => "~ " + f));
-    lines.push(...result.skipped.map((f) => "· " + f + " (skipped)"));
-    if (lines.length === 0) lines.push("Nothing to do.");
-    return { ...state, status: "done", output: lines };
-  } catch (err) {
-    return { ...state, status: "error", output: [String(err)] };
-  }
-}
 
 async function runPreflight(state: State): Promise<State> {
   if (!state.preflightCmd.trim()) {
@@ -820,6 +991,7 @@ const KEY = {
   q: "q",
   b: "b",
   r: "r",
+  d: "d",
 };
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -840,31 +1012,45 @@ function handleKey(key: string, state: State): State | "quit" | "async" {
         if (!item) return state;
         const next: State = { ...state, screen: item.key, output: [], status: "idle" };
         if (item.key === "report") return { ...next, reportData: ["  Loading..."] };
+        if (item.key === "manage-install") return { ...next, manageLoaded: false };
+        if (item.key === "patterns") return { ...next, patternsLoaded: false };
         return next;
       }
       return state;
     }
 
-    case "install": {
+    case "manage-install": {
       if (key === KEY.esc || key === KEY.b) return { ...state, screen: "menu", output: [], status: "idle" };
       if (key === KEY.tab) {
-        const sections: Array<State["installSection"]> = ["left", "right", "run"];
-        const idx = sections.indexOf(state.installSection);
-        return { ...state, installSection: sections[(idx + 1) % sections.length]! };
+        return { ...state, manageSection: state.manageSection === "list" ? "run" : "list" };
       }
-      if (state.installSection === "left") {
-        if (key === KEY.up) return { ...state, installAgentIdx: clamp(state.installAgentIdx - 1, 0, AGENTS.length - 1) };
-        if (key === KEY.down) return { ...state, installAgentIdx: clamp(state.installAgentIdx + 1, 0, AGENTS.length - 1) };
-      } else if (state.installSection === "right") {
-        const FLAGS_KEYS = ["installGlobal", "installRemote", "installPush", "installDryRun"] as const;
-        if (key === KEY.up) return { ...state, installFlagIdx: clamp(state.installFlagIdx - 1, 0, FLAGS_KEYS.length - 1) };
-        if (key === KEY.down) return { ...state, installFlagIdx: clamp(state.installFlagIdx + 1, 0, FLAGS_KEYS.length - 1) };
+      if (state.manageSection === "list") {
+        if (key === KEY.up) return { ...state, manageIdx: clamp(state.manageIdx - 1, 0, state.manageEntries.length - 1) };
+        if (key === KEY.down) return { ...state, manageIdx: clamp(state.manageIdx + 1, 0, state.manageEntries.length - 1) };
         if (key === KEY.space || key === KEY.enter || key === KEY.enter2) {
-          const k = FLAGS_KEYS[state.installFlagIdx];
-          if (k) return { ...state, [k]: !state[k] };
+          const entries = state.manageEntries.map((e, i) =>
+            i === state.manageIdx ? { ...e, selected: !e.selected } : e
+          );
+          return { ...state, manageEntries: entries };
         }
-      } else if (state.installSection === "run") {
+      } else if (state.manageSection === "run") {
         if (key === KEY.enter || key === KEY.enter2) return "async";
+      }
+      return state;
+    }
+
+    case "patterns": {
+      if (key === KEY.esc || key === KEY.b) return { ...state, screen: "menu", output: [], status: "idle" };
+      if (key === KEY.up) return { ...state, patternIdx: clamp(state.patternIdx - 1, 0, Math.max(0, state.patternsData.length - 1)) };
+      if (key === KEY.down) return { ...state, patternIdx: clamp(state.patternIdx + 1, 0, Math.max(0, state.patternsData.length - 1)) };
+      if (key === KEY.d) {
+        if (state.patternsData.length > 0) return { ...state, pendingAction: "delete-pattern" };
+        return state;
+      }
+      if (key === KEY.b) {
+        // b on patterns screen: toggle advisory/blocking (not back)
+        if (state.patternsData.length > 0) return { ...state, pendingAction: "toggle-pattern" };
+        return state;
       }
       return state;
     }
@@ -929,7 +1115,107 @@ async function runAsync(state: State): Promise<State> {
   render(loading);
 
   switch (state.screen) {
-    case "install": return runInstall(loading);
+    case "manage-install": {
+      if (!state.manageLoaded) {
+        // Load: check all entries via checkInstalled
+        const cwd = process.cwd();
+        const entries = await Promise.all(
+          state.manageEntries.map(async (e) => {
+            const installed = await checkInstalled(e.agent, e.scope, cwd);
+            return { ...e, installed, selected: installed };
+          })
+        );
+        return { ...loading, status: "done", manageEntries: entries, manageLoaded: true };
+      } else {
+        // Apply: install/uninstall to match selection
+        const cwd = process.cwd();
+        const results: string[] = [];
+        const updatedEntries = [...state.manageEntries];
+        for (let i = 0; i < updatedEntries.length; i++) {
+          const entry = updatedEntries[i]!;
+          if (entry.selected === entry.installed) continue;
+          if (entry.selected && !entry.installed) {
+            try {
+              await install({ agent: entry.agent, global: entry.scope === "global", cwd });
+              results.push(`✓ Installed ${entry.agent} / ${entry.scope}`);
+              updatedEntries[i] = { ...entry, installed: true };
+            } catch (err) {
+              results.push(`✗ ${entry.agent} / ${entry.scope}: ${String(err)}`);
+            }
+          } else if (!entry.selected && entry.installed) {
+            try {
+              await uninstall(entry.agent, entry.scope, cwd);
+              results.push(`✓ Removed ${entry.agent} / ${entry.scope}`);
+              updatedEntries[i] = { ...entry, installed: false };
+            } catch (err) {
+              results.push(`✗ ${entry.agent} / ${entry.scope}: ${String(err)}`);
+            }
+          }
+        }
+        if (results.length === 0) results.push("Nothing to do.");
+        return { ...loading, status: "done", output: results, manageEntries: updatedEntries };
+      }
+    }
+
+    case "patterns": {
+      const loop = new LearningLoop();
+      try {
+        if (!state.patternsLoaded) {
+          const data = await loop.registry.getAll();
+          return { ...loading, status: "done", patternsData: data.patterns, patternsLoaded: true, pendingAction: null };
+        }
+
+        if (state.pendingAction === "delete-pattern") {
+          const pattern = state.patternsData[state.patternIdx];
+          if (pattern) {
+            const data = await loop.registry.getAll();
+            data.patterns = data.patterns.filter((p) => p.id !== pattern.id);
+            const store = (loop as unknown as { cfg: { storage: { save: (d: unknown) => Promise<void> } } }).cfg.storage;
+            await store.save(data);
+            const reloaded = await loop.registry.getAll();
+            const newIdx = clamp(state.patternIdx, 0, Math.max(0, reloaded.patterns.length - 1));
+            return {
+              ...loading,
+              status: "done",
+              patternsData: reloaded.patterns,
+              patternIdx: newIdx,
+              pendingAction: null,
+              output: [`Deleted pattern: ${pattern.signature.slice(0, 40)}`],
+            };
+          }
+          return { ...loading, pendingAction: null };
+        }
+
+        if (state.pendingAction === "toggle-pattern") {
+          const pattern = state.patternsData[state.patternIdx];
+          if (pattern) {
+            const data = await loop.registry.getAll();
+            const idx = data.patterns.findIndex((p) => p.id === pattern.id);
+            if (idx >= 0) {
+              const p = data.patterns[idx]!;
+              const newStatus = p.status === "blocking" ? "advisory" : "blocking";
+              data.patterns[idx] = { ...p, status: newStatus };
+              const store = (loop as unknown as { cfg: { storage: { save: (d: unknown) => Promise<void> } } }).cfg.storage;
+              await store.save(data);
+              const reloaded = await loop.registry.getAll();
+              return {
+                ...loading,
+                status: "done",
+                patternsData: reloaded.patterns,
+                pendingAction: null,
+                output: [`Toggled ${pattern.signature.slice(0, 30)} → ${newStatus}`],
+              };
+            }
+          }
+          return { ...loading, pendingAction: null };
+        }
+
+        return { ...loading, pendingAction: null };
+      } finally {
+        await loop.close();
+      }
+    }
+
     case "preflight": return runPreflight(loading);
     case "learn": {
       const out = await runLearn();
@@ -1020,6 +1306,24 @@ export async function runTui(): Promise<void> {
 
     // Auto-load report when entering that screen
     if (state.screen === "report" && state.reportData[0] === "  Loading...") {
+      render(state);
+      state = await runAsync(state);
+    }
+
+    // Auto-load manage-install on screen enter
+    if (state.screen === "manage-install" && !state.manageLoaded) {
+      render(state);
+      state = await runAsync(state);
+    }
+
+    // Auto-load patterns on screen enter
+    if (state.screen === "patterns" && !state.patternsLoaded) {
+      render(state);
+      state = await runAsync(state);
+    }
+
+    // Auto-run pending action for patterns
+    if (state.screen === "patterns" && state.pendingAction !== null) {
       render(state);
       state = await runAsync(state);
     }
