@@ -24,7 +24,103 @@ There are three integration patterns depending on your setup.
 
 The most powerful approach: the agent never needs to call this library explicitly. Hooks intercept every shell command automatically.
 
-Add to `.claude/settings.json` in your repo (or `~/.claude/settings.json` globally):
+#### What are Claude Code hooks?
+
+Hooks are shell commands that Claude Code runs automatically at specific points in its lifecycle. They receive context via stdin as JSON and can block actions by exiting with code 2. They're configured in a `settings.json` file — no Claude API changes needed.
+
+**Settings file locations** (all three can coexist; more specific wins):
+
+| File | Scope |
+|------|-------|
+| `~/.claude/settings.json` | All your projects, not committed |
+| `.claude/settings.json` | This repo only, can be committed |
+| `.claude/settings.local.json` | This repo only, gitignored |
+
+**Hook JSON structure:**
+```json
+{
+  "hooks": {
+    "HookEvent": [
+      {
+        "matcher": "ToolName",
+        "hooks": [
+          { "type": "command", "command": "your-script.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Exit code behaviour:**
+
+| Exit code | Effect |
+|-----------|--------|
+| `0` | Hook passed, continue |
+| `1` | Hook failed — stderr shown to user, tool runs anyway |
+| `2` | **Blocked** — stderr is fed back to Claude, tool does not run |
+
+**What's in stdin:** The hook receives a JSON object with `tool_name`, `tool_input` (for PreToolUse), and `tool_output` (for PostToolUse), plus `session_id`, `cwd`, and others.
+
+---
+
+#### Step-by-step setup for agentic-feedback
+
+**1. Install the package**
+```bash
+npm install -g agentic-feedback
+# or locally: npm install agentic-feedback
+```
+
+**2. Create the hook scripts**
+
+```bash
+mkdir -p .claude/hooks
+```
+
+`.claude/hooks/preflight.sh`:
+```bash
+#!/bin/bash
+# Reads the Bash tool input from stdin, runs preflight check.
+# Exit 2 = blocked (Claude sees the error and must find an alternative).
+
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+
+if [ -z "$COMMAND" ]; then exit 0; fi
+
+agentic-feedback preflight "$COMMAND"
+STATUS=$?
+
+# agentic-feedback exits 2 when blocked — pass that through
+exit $STATUS
+```
+
+`.claude/hooks/record.sh`:
+```bash
+#!/bin/bash
+# Records the outcome of every Bash command for pattern learning.
+
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_output.exit_code // 0')
+
+if [ -z "$COMMAND" ]; then exit 0; fi
+
+OUTCOME="success"
+[ "$EXIT_CODE" != "0" ] && OUTCOME="mechanical-failure"
+
+echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":0}" \
+  | agentic-feedback record
+
+exit 0  # Always exit 0 — recording should never block
+```
+
+```bash
+chmod +x .claude/hooks/preflight.sh .claude/hooks/record.sh
+```
+
+**3. Wire the hooks in `.claude/settings.json`**
 
 ```json
 {
@@ -32,56 +128,43 @@ Add to `.claude/settings.json` in your repo (or `~/.claude/settings.json` global
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "command": "node -e \"\nconst input = require('fs').readFileSync('/dev/stdin','utf8');\nconst cmd = JSON.parse(input).command;\nconst {execSync} = require('child_process');\ntry {\n  execSync('agentic-feedback preflight ' + JSON.stringify(cmd), {stdio:'inherit'});\n} catch(e) { process.exit(1); }\n\""
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/preflight.sh" }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Bash",
-        "command": "node -e \"\nconst input = require('fs').readFileSync('/dev/stdin','utf8');\nconst {tool_input, tool_response} = JSON.parse(input);\nconst outcome = tool_response.exit_code === 0 ? 'success' : 'mechanical-failure';\nconst trace = JSON.stringify({command: tool_input.command, outcome, duration_ms: 0});\nrequire('child_process').execSync('echo ' + JSON.stringify(trace) + ' | agentic-feedback record');\n\""
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/record.sh" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "agentic-feedback learn" }
+        ]
       }
     ]
   }
 }
 ```
 
-**How it works:**
-- `PreToolUse` fires before every `Bash` tool call — if `agentic-feedback preflight` exits non-zero (blocked), Claude sees the error message and must find an alternative
-- `PostToolUse` records every outcome automatically — no agent cooperation needed
-- Run `agentic-feedback learn` at the end of a session to promote patterns
+**4. Verify**
 
-For a cleaner setup, extract the hook logic into a script:
-
-```bash
-# .claude/hooks/preflight.js
-#!/usr/bin/env node
-import { createReadStream } from "node:fs";
-
-let raw = "";
-process.stdin.on("data", d => raw += d);
-process.stdin.on("end", () => {
-  const { command } = JSON.parse(raw);
-  // Inline the LearningLoop here for speed, or shell out to the CLI
-  import("agentic-feedback").then(({ LearningLoop }) => {
-    const loop = new LearningLoop();
-    loop.preflight(command).then(result => {
-      if (!result.allowed) {
-        console.error(`BLOCKED: ${result.reason}`);
-        console.error(`Use instead: ${result.requiredAlternative}`);
-        process.exit(1);
-      }
-    });
-  });
-});
+Run `/hooks` inside a Claude Code session to confirm hooks are loaded. Then try a blocked command:
 ```
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{ "matcher": "Bash", "command": "node .claude/hooks/preflight.js" }]
-  }
-}
+> Run: ssh host << 'EOF'\necho hi\nEOF
 ```
+Claude should see the block message and self-correct to a safe alternative.
+
+**How it works end-to-end:**
+- `PreToolUse` fires before every `Bash` call — exit 2 blocks it and feeds the reason back to Claude
+- `PostToolUse` records every outcome silently — no agent cooperation needed
+- `Stop` runs `learn()` when the session ends, promoting repeated failures to blocking status
 
 ---
 
@@ -180,15 +263,7 @@ Patterns 2 and 3 require you to trigger `learn()` periodically. Good places:
 - **Cron job** — `0 * * * * agentic-feedback learn` (hourly)
 - **After N failures** — call `loop.learn()` whenever `record()` returns a new pattern
 
-Pattern 1 (hooks) can wire this as a `Stop` hook:
-
-```json
-{
-  "hooks": {
-    "Stop": [{ "command": "agentic-feedback learn" }]
-  }
-}
-```
+Pattern 1 (hooks) wires this automatically via the `Stop` hook shown in the setup above.
 
 ---
 
