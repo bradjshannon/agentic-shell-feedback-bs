@@ -14,6 +14,204 @@ AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShel
 
 ---
 
+## Integrating with Agents
+
+There are three integration patterns depending on your setup.
+
+---
+
+### Pattern 1 — Claude Code hooks (zero agent-code changes)
+
+The most powerful approach: the agent never needs to call this library explicitly. Hooks intercept every shell command automatically.
+
+Add to `.claude/settings.json` in your repo (or `~/.claude/settings.json` globally):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "command": "node -e \"\nconst input = require('fs').readFileSync('/dev/stdin','utf8');\nconst cmd = JSON.parse(input).command;\nconst {execSync} = require('child_process');\ntry {\n  execSync('agentic-feedback preflight ' + JSON.stringify(cmd), {stdio:'inherit'});\n} catch(e) { process.exit(1); }\n\""
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "command": "node -e \"\nconst input = require('fs').readFileSync('/dev/stdin','utf8');\nconst {tool_input, tool_response} = JSON.parse(input);\nconst outcome = tool_response.exit_code === 0 ? 'success' : 'mechanical-failure';\nconst trace = JSON.stringify({command: tool_input.command, outcome, duration_ms: 0});\nrequire('child_process').execSync('echo ' + JSON.stringify(trace) + ' | agentic-feedback record');\n\""
+      }
+    ]
+  }
+}
+```
+
+**How it works:**
+- `PreToolUse` fires before every `Bash` tool call — if `agentic-feedback preflight` exits non-zero (blocked), Claude sees the error message and must find an alternative
+- `PostToolUse` records every outcome automatically — no agent cooperation needed
+- Run `agentic-feedback learn` at the end of a session to promote patterns
+
+For a cleaner setup, extract the hook logic into a script:
+
+```bash
+# .claude/hooks/preflight.js
+#!/usr/bin/env node
+import { createReadStream } from "node:fs";
+
+let raw = "";
+process.stdin.on("data", d => raw += d);
+process.stdin.on("end", () => {
+  const { command } = JSON.parse(raw);
+  // Inline the LearningLoop here for speed, or shell out to the CLI
+  import("agentic-feedback").then(({ LearningLoop }) => {
+    const loop = new LearningLoop();
+    loop.preflight(command).then(result => {
+      if (!result.allowed) {
+        console.error(`BLOCKED: ${result.reason}`);
+        console.error(`Use instead: ${result.requiredAlternative}`);
+        process.exit(1);
+      }
+    });
+  });
+});
+```
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "Bash", "command": "node .claude/hooks/preflight.js" }]
+  }
+}
+```
+
+---
+
+### Pattern 2 — Agent SDK / custom agents
+
+For agents built with the Claude API or another framework, call the library directly in your execution layer:
+
+```typescript
+import { LearningLoop } from "agentic-feedback";
+
+const loop = new LearningLoop();
+
+async function executeShellCommand(command: string, hints = {}) {
+  // 1. Check before running
+  const check = await loop.preflight(command, hints);
+  if (!check.allowed) {
+    // Return the block reason to the model so it can self-correct
+    return {
+      error: `Command blocked: ${check.reason}`,
+      alternative: check.requiredAlternative,
+    };
+  }
+
+  // 2. Run the command
+  const start = Date.now();
+  try {
+    const output = await runCommand(command);
+    await loop.record({
+      command,
+      context: loop.analyze(command, hints),
+      outcome: "success",
+      duration_ms: Date.now() - start,
+    });
+    return { output };
+  } catch (err) {
+    const outcome = isTimeout(err) ? "timeout" : "mechanical-failure";
+    await loop.record({
+      command,
+      context: loop.analyze(command, hints),
+      outcome,
+      duration_ms: Date.now() - start,
+      errorMessage: String(err),
+    });
+    throw err;
+  }
+}
+
+// At end of session
+await loop.learn();
+await loop.close();
+```
+
+When a command is blocked, **return the reason and alternative to the model** — don't just throw. The model needs to see the alternative to self-correct on the next attempt.
+
+---
+
+### Pattern 3 — Wrap the CLI around an existing shell executor
+
+No code changes needed to your agent. Wrap command execution at the process level:
+
+```bash
+#!/bin/bash
+# wrap-exec.sh — drop-in replacement for direct shell execution
+COMMAND="$*"
+
+# Preflight check (exit code 2 = blocked)
+agentic-feedback preflight "$COMMAND"
+PREFLIGHT=$?
+
+if [ $PREFLIGHT -eq 2 ]; then
+  exit 1  # Agent sees the error output from preflight
+fi
+
+# Run it, record the outcome
+START=$(date +%s%3N)
+eval "$COMMAND"
+EXIT=$?
+END=$(date +%s%3N)
+
+OUTCOME="success"
+[ $EXIT -ne 0 ] && OUTCOME="mechanical-failure"
+
+echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":$((END-START))}" \
+  | agentic-feedback record
+
+exit $EXIT
+```
+
+---
+
+### Wiring up `learn()`
+
+Patterns 2 and 3 require you to trigger `learn()` periodically. Good places:
+
+- **End of each Claude session** — run `agentic-feedback learn` as a `Stop` hook
+- **Cron job** — `0 * * * * agentic-feedback learn` (hourly)
+- **After N failures** — call `loop.learn()` whenever `record()` returns a new pattern
+
+Pattern 1 (hooks) can wire this as a `Stop` hook:
+
+```json
+{
+  "hooks": {
+    "Stop": [{ "command": "agentic-feedback learn" }]
+  }
+}
+```
+
+---
+
+### Sharing patterns across agents / team members
+
+Export your registry and commit it, or share via a common path:
+
+```bash
+# Export learned patterns to the repo
+agentic-feedback export > .claude/failure-patterns.json
+
+# On a new machine / fresh container, seed the registry
+agentic-feedback import < .claude/failure-patterns.json
+```
+
+Or point all agents at a shared storage directory:
+
+```typescript
+const loop = new LearningLoop({ storageDir: "/shared/nfs/agentic-feedback" });
+```
+
+---
+
 ## Quick Start
 
 ```typescript
