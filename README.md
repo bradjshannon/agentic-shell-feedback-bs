@@ -17,7 +17,9 @@ AI agents make the same transport-level mistakes repeatedly — e.g. a PowerShel
 ## Quick Install
 
 ```bash
-npm install -g agentic-feedback
+git clone https://github.com/bradjshannon/agentic-shell-feedback-bs.git
+cd agentic-shell-feedback-bs
+npm install && npm run build && npm link
 
 # Claude Code (default) — also covers VS Code Copilot agent mode
 agentic-feedback install
@@ -102,8 +104,9 @@ Hooks are shell commands that Claude Code runs automatically at specific points 
 
 **1. Install the package**
 ```bash
-npm install -g agentic-feedback
-# or locally: npm install agentic-feedback
+git clone https://github.com/bradjshannon/agentic-shell-feedback-bs.git
+cd agentic-shell-feedback-bs
+npm install && npm run build && npm link
 ```
 
 **2. Create the hook scripts**
