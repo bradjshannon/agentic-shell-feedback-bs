@@ -410,7 +410,34 @@ async function installCopilot(
   await ensureDir(hooksDir, options, result);
   await patchSettings(join(hooksDir, "preflight.json"), COPILOT_PREFLIGHT_JSON, options, result);
   await patchSettings(join(hooksDir, "record.json"), COPILOT_RECORD_JSON, options, result);
-  await writeScript(join(cwd, "copilot-setup-steps.yml"), COPILOT_SETUP_STEPS_YML, options, result);
+  await patchSetupSteps(join(cwd, "copilot-setup-steps.yml"), options, result);
+}
+
+async function patchSetupSteps(
+  path: string,
+  options: InstallOptions,
+  result: InstallResult,
+): Promise<void> {
+  if (options.dryRun) {
+    result.filesPatched.push(path);
+    return;
+  }
+  // If the file already mentions agentic-feedback, don't touch it.
+  if (existsSync(path)) {
+    const existing = await readFile(path, "utf8");
+    if (existing.includes("agentic-feedback")) {
+      result.skipped.push(path);
+      return;
+    }
+    // Append install step to existing file rather than overwriting.
+    const append = `\n  - name: Install agentic-feedback\n    run: npm install -g agentic-feedback\n`;
+    await writeFile(path, existing.trimEnd() + append, "utf8");
+    result.filesPatched.push(path);
+    return;
+  }
+  await writeFile(path, COPILOT_SETUP_STEPS_YML, "utf8");
+  await chmod(path, 0o644);
+  result.filesWritten.push(path);
 }
 
 // ─── File helpers ──────────────────────────────────────────────────────────

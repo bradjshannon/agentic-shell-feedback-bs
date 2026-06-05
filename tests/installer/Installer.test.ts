@@ -240,6 +240,30 @@ describe("install — copilot (GitHub cloud agent)", () => {
     expect(allFiles.some((f) => f.endsWith("record.json"))).toBe(true);
     expect(allFiles.some((f) => f.endsWith("copilot-setup-steps.yml"))).toBe(true);
   });
+
+  it("appends to existing copilot-setup-steps.yml rather than overwriting", async () => {
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(
+      join(dir, "copilot-setup-steps.yml"),
+      "steps:\n  - name: Install Node\n    run: nvm use 20\n",
+      "utf8",
+    );
+    await install({ agent: "copilot", cwd: dir });
+    const yaml = await readFile(join(dir, "copilot-setup-steps.yml"), "utf8");
+    expect(yaml).toContain("Install Node");
+    expect(yaml).toContain("agentic-feedback");
+  });
+
+  it("skips copilot-setup-steps.yml when agentic-feedback already present", async () => {
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(
+      join(dir, "copilot-setup-steps.yml"),
+      "steps:\n  - name: Install agentic-feedback\n    run: npm install -g agentic-feedback\n",
+      "utf8",
+    );
+    const result = await install({ agent: "copilot", cwd: dir });
+    expect(result.skipped.some((f) => f.endsWith("copilot-setup-steps.yml"))).toBe(true);
+  });
 });
 
 describe("install — generic", () => {
@@ -263,5 +287,76 @@ describe("install — generic", () => {
   it("wrap-exec.sh is executable", async () => {
     await install({ agent: "generic", cwd: dir });
     expect(await isExecutable(join(dir, "bin", "wrap-exec.sh"))).toBe(true);
+  });
+});
+
+describe("multi-agent co-installation", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeTempDir();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("claude-code and cursor installs do not conflict", async () => {
+    await install({ agent: "claude-code", cwd: dir });
+    await install({ agent: "cursor", cwd: dir });
+
+    const claudeSettings = JSON.parse(
+      await readFile(join(dir, ".claude", "settings.json"), "utf8"),
+    ) as { hooks: unknown };
+    const cursorHooks = JSON.parse(
+      await readFile(join(dir, ".cursor", "hooks.json"), "utf8"),
+    ) as { beforeShellExecution: unknown };
+
+    expect(claudeSettings.hooks).toBeDefined();
+    expect(cursorHooks.beforeShellExecution).toBeDefined();
+  });
+
+  it("claude-code and cline installs do not conflict", async () => {
+    await install({ agent: "claude-code", cwd: dir });
+    await install({ agent: "cline", cwd: dir });
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".claude", "hooks", "preflight.sh"))).toBe(true);
+    expect(existsSync(join(dir, ".clinerules", "hooks", "beforeShellExecution"))).toBe(true);
+  });
+
+  it("claude-code and copilot installs do not conflict", async () => {
+    await install({ agent: "claude-code", cwd: dir });
+    await install({ agent: "copilot", cwd: dir });
+
+    const claudeSettings = JSON.parse(
+      await readFile(join(dir, ".claude", "settings.json"), "utf8"),
+    ) as { hooks: unknown };
+    const preflight = JSON.parse(
+      await readFile(join(dir, ".github", "hooks", "preflight.json"), "utf8"),
+    ) as { version: number };
+
+    expect(claudeSettings.hooks).toBeDefined();
+    expect(preflight.version).toBe(1);
+  });
+
+  it("installing the same agent twice is idempotent", async () => {
+    await install({ agent: "claude-code", cwd: dir });
+    await install({ agent: "claude-code", cwd: dir });
+
+    const raw = await readFile(join(dir, ".claude", "settings.json"), "utf8");
+    const settings = JSON.parse(raw) as { hooks: { PreToolUse: unknown[] } };
+    // Should not accumulate duplicate hook entries
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it("installing claude-code preserves settings added by cursor install", async () => {
+    // cursor install writes .cursor/hooks.json; claude-code install only touches .claude/
+    await install({ agent: "cursor", cwd: dir });
+    await install({ agent: "claude-code", cwd: dir });
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".cursor", "hooks.json"))).toBe(true);
+    expect(existsSync(join(dir, ".claude", "settings.json"))).toBe(true);
   });
 });
