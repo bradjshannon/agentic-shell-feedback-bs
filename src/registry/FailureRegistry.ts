@@ -13,6 +13,7 @@ import {
   rankPatterns,
   type ScoredPattern,
 } from "./PatternMatcher.js";
+import { computeCommandFingerprint } from "./CommandFingerprint.js";
 
 export class FailureRegistry {
   constructor(
@@ -26,23 +27,29 @@ export class FailureRegistry {
     const sig = computeSignature(trace.context);
     const env = computeEnvironmentFingerprint(trace.context);
 
+    // Only *mechanical* failures teach us anything actionable: the command
+    // could not be run as intended (not found, not executable, timed out).
+    // A plain non-zero exit ("semantic-failure" — a test that failed, a grep
+    // that matched nothing, an experiment that didn't pan out) is NOT a tooling
+    // problem and must never seed or strengthen a pattern, or the tool would
+    // start blocking the very commands a developer is iterating on.
+    const isLearnable = trace.outcome === "timeout" || trace.outcome === "mechanical-failure";
+
     const existing = data.patterns.find((p) => p.signature === sig && p.status !== "expired");
 
     if (existing) {
-      // A successful run must never strengthen a failure pattern: doing so would
-      // inflate occurrences/confidence (and refresh lastSeen, preventing expiry)
-      // off the back of commands that actually worked, risking false promotion to
-      // blocking. We still capture a working alternative when one is reported.
-      if (trace.outcome !== "success") {
+      if (isLearnable) {
         existing.occurrences += 1;
         existing.lastSeen = trace.timestamp;
         existing.wasted_ms += trace.outcome === "timeout" ? trace.duration_ms : 0;
         existing.confidence = computeConfidence(existing.occurrences);
       }
+      // A working alternative is worth capturing whatever the outcome — it's
+      // what we suggest when we block, and it's the gate for promotion.
       if (trace.alternativeUsed) {
         existing.successfulAlternative = trace.alternativeUsed;
       }
-    } else if (trace.outcome !== "success") {
+    } else if (isLearnable) {
       const newPattern: FailurePattern = {
         id: randomUUID(),
         signature: sig,
@@ -129,7 +136,9 @@ function describeApproach(ctx: CommandContext): string {
   if (ctx.isMultiline) parts.push("multiline");
   parts.push(`${ctx.transportClass} transport`);
   parts.push(`via ${ctx.target}`);
-  return parts.join(" ");
+  const shape = parts.join(" ");
+  const fp = computeCommandFingerprint(ctx.command);
+  return fp ? `${fp} — ${shape}` : shape;
 }
 
 function evictExcess(patterns: FailurePattern[], max: number): FailurePattern[] {

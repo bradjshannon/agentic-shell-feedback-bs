@@ -51,8 +51,15 @@ EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_output.exit_code // 0')
 
 if [ -z "$COMMAND" ]; then exit 0; fi
 
-OUTCOME="success"
-[ "$EXIT_CODE" != "0" ] && OUTCOME="mechanical-failure"
+# Only mechanical failures (couldn't run as intended) teach us anything. A plain
+# non-zero exit is usually semantic (a test failed, grep matched nothing) and is
+# recorded but never seeds a blocking pattern.
+case "$EXIT_CODE" in
+  0)           OUTCOME="success" ;;
+  124|137|143) OUTCOME="timeout" ;;            # timed out / killed
+  126|127)     OUTCOME="mechanical-failure" ;; # not executable / not found
+  *)           OUTCOME="semantic-failure" ;;
+esac
 
 echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":0}" \\
   | agentic-feedback record
@@ -223,8 +230,12 @@ EXIT_CODE="\${CURSOR_EXIT_CODE:-0}"
 
 if [ -z "$COMMAND" ]; then exit 0; fi
 
-OUTCOME="success"
-[ "$EXIT_CODE" != "0" ] && OUTCOME="mechanical-failure"
+case "$EXIT_CODE" in
+  0)           OUTCOME="success" ;;
+  124|137|143) OUTCOME="timeout" ;;
+  126|127)     OUTCOME="mechanical-failure" ;;
+  *)           OUTCOME="semantic-failure" ;;
+esac
 
 echo "{\\"command\\":$(echo "$COMMAND" | jq -Rs .),\\"outcome\\":\\"$OUTCOME\\",\\"duration_ms\\":0}" \\
   | agentic-feedback record
@@ -326,8 +337,7 @@ const COPILOT_RECORD_JSON = {
           "COMMAND=$(echo \"$INPUT\" | jq -r '.toolArgs.command // empty')",
           "EXIT_CODE=$(echo \"$INPUT\" | jq -r '.toolOutput.exitCode // 0')",
           "[ -z \"$COMMAND\" ] && exit 0",
-          "OUTCOME=\"success\"",
-          "[ \"$EXIT_CODE\" != \"0\" ] && OUTCOME=\"mechanical-failure\"",
+          "case \"$EXIT_CODE\" in 0) OUTCOME=\"success\";; 124|137|143) OUTCOME=\"timeout\";; 126|127) OUTCOME=\"mechanical-failure\";; *) OUTCOME=\"semantic-failure\";; esac",
           "echo \"{\\\"command\\\":$(echo \\\"$COMMAND\\\" | jq -Rs .),\\\"outcome\\\":\\\"$OUTCOME\\\",\\\"duration_ms\\\":0}\" | agentic-feedback record",
           "exit 0",
         ].join("\n"),
@@ -374,8 +384,12 @@ eval "$COMMAND"
 EXIT=$?
 END=$(date +%s%3N)
 
-OUTCOME="success"
-[ $EXIT -ne 0 ] && OUTCOME="mechanical-failure"
+case "$EXIT" in
+  0)           OUTCOME="success" ;;
+  124|137|143) OUTCOME="timeout" ;;
+  126|127)     OUTCOME="mechanical-failure" ;;
+  *)           OUTCOME="semantic-failure" ;;
+esac
 
 echo "{\"command\":$(echo "$COMMAND" | jq -Rs .),\"outcome\":\"$OUTCOME\",\"duration_ms\":$((END-START))}" \\
   | agentic-feedback record

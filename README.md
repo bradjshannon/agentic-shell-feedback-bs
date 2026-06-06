@@ -8,11 +8,15 @@
 
 AI coding assistants like Claude, Cursor, and Copilot make the same mistakes over and over. They'll try a command that doesn't work, get an error, and then try the exact same thing in the next session — because they have no memory of what failed before.
 
-This tool gives them that memory. Every time an AI assistant runs a shell command, agentic-feedback watches what happens. When something fails, it gets recorded. The rules are simple:
+This tool gives them that memory. Every time an AI assistant runs a shell command, agentic-feedback watches what happens — and it is deliberately conservative about getting in the way. Its one job is to catch the *obvious mechanical mistakes* and say "no, that won't work — do it like this instead."
 
-- A failure happens **twice within 30 days** → that command is automatically blocked from then on
-- A failure **wastes more than 60 seconds** → blocked immediately
-- An advisory pattern causes **no problems for 90 days** → it's forgotten
+The rules:
+
+- It only learns from **mechanical failures** — a command that couldn't run as intended (not found, not executable, timed out). A command that simply returns an error (a failing test, a `grep` with no match, an experiment that didn't pan out) is **never** learned from, so it won't block the commands you're iterating on.
+- A mechanical failure that **recurs** (twice within 30 days, or wastes 60+ seconds) becomes a tracked pattern.
+- A tracked pattern is only ever **hard-blocked once it also knows the working alternative** to suggest. Until then it just *warns* — the command still runs.
+- A handful of **built-in rules** block the most common transport mistakes (e.g. PowerShell + SSH + heredoc) immediately, always with the fix.
+- A pattern not seen for **90 days** is forgotten.
 
 When a command is blocked, the AI is told what to do instead — so it self-corrects without you having to intervene.
 
@@ -102,16 +106,27 @@ preflight(cmd, hints)
   │    │    CMD_SSH_MULTILINE       → deny
   │    │    COMPLEX_INLINE_SSH      → warn (> 300 chars)
   │    │    NESTED_QUOTE_SSH        → warn
-  │    └─ Registry patterns (blocking status, confidence ≥ threshold) → deny
+  │    └─ Registry patterns:
+  │         blocking + exact signature match → deny
+  │         anything fuzzier / advisory      → warn (command still runs)
   │
   └─ PreflightResult { allowed, warnings, reason, requiredAlternative }
 
 record(trace)
-  └─ FailureRegistry: upsert pattern, accumulate wasted_ms, update confidence
+  └─ FailureRegistry: learns ONLY from mechanical-failure / timeout outcomes.
+     A plain non-zero exit (semantic-failure) is stored as a trace but never
+     creates or strengthens a pattern. Upserts by signature, accumulates
+     wasted_ms, updates confidence; captures a working alternative if reported.
 
 learn()
-  └─ PolicyEngine: advisory → blocking when seen ≥ 2× in 30 days OR ≥ 60s wasted
+  └─ PolicyEngine: advisory → blocking when (seen ≥ 2× in 30 days OR ≥ 60s wasted)
+                   AND a known alternative exists to suggest
                    advisory → expired when not seen in 90 days
+
+# Signature = shell:target:multiline:heredoc:transport:commandFingerprint
+# The command fingerprint normalizes away volatile bits (paths, hosts, quoted
+# strings, heredoc bodies, numbers) so a pattern is specific to the command that
+# misbehaved — not every command of the same transport shape.
 ```
 
 ---

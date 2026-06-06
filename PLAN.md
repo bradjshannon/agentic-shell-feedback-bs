@@ -70,8 +70,16 @@ Key types:
 ### `registry/` — Failure Registry
 
 **`PatternMatcher`**: computes a deterministic `signature` string from a `CommandContext` by
-normalizing: shell, target, multiline flag, heredoc flag, transport class. Similarity scoring
-for fuzzy matching when exact signature is absent.
+normalizing: shell, target, multiline flag, heredoc flag, transport class, and a **command
+fingerprint** (the command reduced to a stable skeleton — see `CommandFingerprint`). The
+fingerprint is the dominant axis: a pattern for a *different* command is never surfaced, and a
+match only scores 1.0 (the bar for hard-blocking) on an exact signature. Same command, slightly
+different shape scores below 1.0 and can only raise an advisory warning.
+
+**`CommandFingerprint`**: `computeCommandFingerprint(cmd)` replaces volatile parts of a command
+(heredoc/here-string bodies, quoted strings, paths, `user@host` targets, URLs, numbers) with
+placeholders, leaving the command/sub-command words intact. Stable across runs of the same
+command, distinct across different commands.
 
 **`FailureRegistry`**: CRUD over `FailurePattern[]` with deduplication.
 - `record(trace)` — upsert: find matching pattern by signature, increment occurrence, update
@@ -104,9 +112,12 @@ REPEATED_TIMEOUT_SHAPE  — same command shape that timed out previously → DEN
 ### `policy/` — Policy Engine
 
 **`PromotionRules`**: pure functions over `FailurePattern`:
-- `shouldPromote(pattern, now)`: `occurrences >= 2 AND daysSinceFirst <= 30` OR
-  `wasted_ms >= 60_000` (1 min of wasted time) → promote to blocking.
-- `shouldExpire(pattern, now)`: `status != expired AND daysSinceLastSeen >= 90` → expire.
+- `shouldPromote(pattern, now)`: advisory **and** has a known alternative, **and**
+  (`occurrences >= 2 AND daysSinceFirst <= 30` OR `wasted_ms >= 60_000`) → promote to blocking.
+  The known-alternative requirement is the core "light touch" guard: without a fix to suggest a
+  pattern stays advisory (warn-only) and never prevents a command from running.
+- `shouldExpire(pattern, now)`: `status == advisory AND daysSinceLastSeen >= 90` → expire.
+  (Blocking patterns never auto-expire.)
 
 **`PolicyEngine`**: iterates all patterns, applies rules, mutates status, persists via registry.
 
@@ -174,7 +185,7 @@ Commands:
   "patterns": [
     {
       "id": "uuid",
-      "signature": "powershell:remote-ssh:multiline:heredoc",
+      "signature": "powershell:remote-ssh:multiline:heredoc:heredoc:ssh HOST <<HEREDOC",
       "environmentFingerprint": "windows:powershell:ssh",
       "failedApproach": "inline heredoc via SSH",
       "successfulAlternative": "stdin piping",
@@ -218,7 +229,9 @@ interface LearningLoopConfig {
   // Gate behavior
   enableBuiltInRules?: boolean;       // default: true
   customRules?: GateRule[];           // additional rules
-  blockOnConfidence?: number;         // min confidence to block (default: 0.7)
+  minMatchScore?: number;             // min similarity to raise an advisory warning
+                                      // (default: 0.7). Hard blocking always
+                                      // requires an exact signature match.
 
   // Eval
   replayWindowDays?: number;          // traces to include in eval (default: 30)

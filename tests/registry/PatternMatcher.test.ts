@@ -38,9 +38,10 @@ function makePattern(overrides: Partial<FailurePattern> = {}): FailurePattern {
 }
 
 describe("computeSignature", () => {
-  it("produces deterministic output", () => {
+  it("produces deterministic output with shape + command fingerprint", () => {
     const ctx = makeContext();
-    expect(computeSignature(ctx)).toBe("bash:remote-ssh:single:noheredoc:inline");
+    // ssh user@host 'echo hi' → host and quoted string normalized to placeholders
+    expect(computeSignature(ctx)).toBe("bash:remote-ssh:single:noheredoc:inline:ssh HOST STR");
   });
 
   it("includes multiline flag", () => {
@@ -52,7 +53,24 @@ describe("computeSignature", () => {
   });
 
   it("includes transport class", () => {
-    expect(computeSignature(makeContext({ transportClass: "stdin" }))).toMatch(/:stdin$/);
+    expect(computeSignature(makeContext({ transportClass: "stdin" }))).toContain(":stdin:");
+  });
+
+  it("appends the command fingerprint as the final component", () => {
+    const sig = computeSignature(makeContext({ command: "npm test" }));
+    expect(sig).toMatch(/:npm test$/);
+  });
+
+  it("is stable across volatile argument variation", () => {
+    const a = computeSignature(makeContext({ command: "ssh user@host 'echo hi'" }));
+    const b = computeSignature(makeContext({ command: "ssh other@box 'echo bye'" }));
+    expect(a).toBe(b);
+  });
+
+  it("differs for genuinely different commands", () => {
+    const a = computeSignature(makeContext({ command: "npm test" }));
+    const b = computeSignature(makeContext({ command: "npm run build" }));
+    expect(a).not.toBe(b);
   });
 
   it("handles powershell + remote-ssh", () => {
@@ -94,14 +112,25 @@ describe("rankPatterns", () => {
   });
 
   it("sorts descending by score", () => {
-    const ctx = makeContext();
+    const ctx = makeContext({ isMultiline: true });
     const exact = makePattern({ signature: computeSignature(ctx), id: "exact" });
+    // Same command (so same fingerprint), slightly different shape → fuzzy.
     const fuzzy = makePattern({
-      signature: "powershell:remote-ssh:single:noheredoc:inline",
+      signature: computeSignature(makeContext({ isMultiline: false })),
       id: "fuzzy",
     });
-    const results = rankPatterns([fuzzy, exact], ctx);
+    const results = rankPatterns([fuzzy, exact], ctx, 0.4);
     expect(results[0]?.pattern.id).toBe("exact");
+    expect(results[1]?.pattern.id).toBe("fuzzy");
+  });
+
+  it("does not surface a different command, even with identical shape", () => {
+    const ctx = makeContext({ command: "ssh user@host 'echo hi'" });
+    const otherCommand = makePattern({
+      signature: computeSignature(makeContext({ command: "npm test" })),
+      id: "other",
+    });
+    expect(rankPatterns([otherCommand], ctx, 0.4)).toHaveLength(0);
   });
 
   it("filters results below minScore", () => {
@@ -111,11 +140,11 @@ describe("rankPatterns", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("returns fuzzy matches for similar shell+target", () => {
+  it("returns fuzzy matches for the same command with a different shape", () => {
     const ctx = makeContext({ shell: "bash", target: "remote-ssh", isMultiline: true });
-    // Pattern matches same shell + target but different multiline
+    // Same command (so same fingerprint), single-line instead of multiline.
     const similar = makePattern({
-      signature: "bash:remote-ssh:single:noheredoc:inline",
+      signature: computeSignature(makeContext({ shell: "bash", target: "remote-ssh", isMultiline: false })),
       id: "similar",
     });
     const results = rankPatterns([similar], ctx, 0.4);

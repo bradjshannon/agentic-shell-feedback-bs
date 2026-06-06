@@ -12,7 +12,7 @@ export const DEFAULTS = {
   expirationDays: 90,
   enableBuiltInRules: true,
   customRules: [],
-  blockOnConfidence: 0.7,
+  minMatchScore: 0.7,
   replayWindowDays: 30,
 } as const;
 
@@ -34,7 +34,7 @@ export function resolveConfig(config: LearningLoopConfig = {}): ResolvedConfig {
     expirationDays: config.expirationDays ?? DEFAULTS.expirationDays,
     enableBuiltInRules: config.enableBuiltInRules ?? DEFAULTS.enableBuiltInRules,
     customRules: config.customRules ?? [],
-    blockOnConfidence: config.blockOnConfidence ?? DEFAULTS.blockOnConfidence,
+    minMatchScore: config.minMatchScore ?? DEFAULTS.minMatchScore,
     replayWindowDays: config.replayWindowDays ?? DEFAULTS.replayWindowDays,
   };
 }

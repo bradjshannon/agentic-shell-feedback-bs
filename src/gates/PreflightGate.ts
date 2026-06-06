@@ -7,20 +7,24 @@ import type {
 import { type ScoredPattern } from "../registry/PatternMatcher.js";
 import { getBuiltInRules } from "./BuiltInRules.js";
 
+/** A registry pattern only hard-blocks on an exact signature match (score 1.0). */
+const EXACT_MATCH = 1;
+
 export interface PreflightGateOptions {
   enableBuiltInRules?: boolean;
   customRules?: GateRule[];
-  blockOnConfidence?: number;
+  /** Minimum match score for a pattern to be surfaced as an advisory warning. */
+  minMatchScore?: number;
 }
 
 export class PreflightGate {
   private readonly rules: GateRule[];
-  private readonly blockOnConfidence: number;
+  private readonly minMatchScore: number;
 
   constructor(private readonly options: PreflightGateOptions = {}) {
     const builtIn = options.enableBuiltInRules !== false ? getBuiltInRules() : [];
     this.rules = [...builtIn, ...(options.customRules ?? [])];
-    this.blockOnConfidence = options.blockOnConfidence ?? 0.7;
+    this.minMatchScore = options.minMatchScore ?? 0.7;
   }
 
   /**
@@ -49,9 +53,15 @@ export class PreflightGate {
       }
     }
 
-    // 2. Check dynamic patterns from registry
+    // 2. Check dynamic patterns from registry.
+    //    Light touch: a learned pattern only *blocks* on an exact match — the
+    //    same command, same shape, that we know fails and can offer a fix for.
+    //    Anything fuzzier (a sibling command shape) at most raises a warning, so
+    //    the command still runs.
     for (const { pattern, score } of knownPatterns) {
-      if (pattern.status === "blocking" && score >= this.blockOnConfidence) {
+      if (pattern.status === "expired") continue;
+
+      if (pattern.status === "blocking" && score >= EXACT_MATCH) {
         return {
           allowed: false,
           warnings,
@@ -61,11 +71,14 @@ export class PreflightGate {
         };
       }
 
-      if (pattern.status === "advisory" && score >= this.blockOnConfidence) {
-        warnings.push(
-          `Advisory: similar pattern has failed ${pattern.occurrences} time(s): ` +
-            `${pattern.failedApproach}. Consider: ${pattern.successfulAlternative}`,
-        );
+      if (score >= this.minMatchScore) {
+        const lead =
+          pattern.status === "blocking"
+            ? "Advisory: a similar command is blocked"
+            : `Advisory: similar pattern has failed ${pattern.occurrences} time(s)`;
+        const alt = (pattern.successfulAlternative ?? "").trim();
+        const suggestion = alt && alt.toLowerCase() !== "unknown" ? `. Consider: ${alt}` : "";
+        warnings.push(`${lead}: ${pattern.failedApproach}${suggestion}`);
       }
     }
 

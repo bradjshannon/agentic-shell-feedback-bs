@@ -143,7 +143,12 @@ export interface LearningLoopConfig {
   // Gate behavior
   enableBuiltInRules?: boolean;
   customRules?: GateRule[];
-  blockOnConfidence?: number;
+  /**
+   * Minimum similarity score (0–1) for a learned pattern to be surfaced as an
+   * advisory warning. Hard blocking always requires an exact match, independent
+   * of this value. Default: 0.7.
+   */
+  minMatchScore?: number;
 
   // Eval
   replayWindowDays?: number;
@@ -159,6 +164,6 @@ export interface ResolvedConfig {
   expirationDays: number;
   enableBuiltInRules: boolean;
   customRules: GateRule[];
-  blockOnConfidence: number;
+  minMatchScore: number;
   replayWindowDays: number;
 }

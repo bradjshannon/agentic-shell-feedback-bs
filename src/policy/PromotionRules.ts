@@ -15,6 +15,15 @@ export const DEFAULT_THRESHOLDS: PromotionThresholds = {
 };
 
 /**
+ * A pattern has a usable alternative if it carries a concrete suggestion — not
+ * the "unknown" placeholder we store when none has been observed yet.
+ */
+export function hasKnownAlternative(pattern: FailurePattern): boolean {
+  const alt = (pattern.successfulAlternative ?? "").trim();
+  return alt.length > 0 && alt.toLowerCase() !== "unknown";
+}
+
+/**
  * Returns true if this advisory pattern should be promoted to blocking.
  */
 export function shouldPromote(
@@ -23,6 +32,13 @@ export function shouldPromote(
   thresholds: PromotionThresholds = DEFAULT_THRESHOLDS,
 ): boolean {
   if (pattern.status !== "advisory") return false;
+
+  // Light touch: only ever hard-block when we can tell the agent what to do
+  // instead. Without a concrete alternative a pattern stays advisory and merely
+  // warns — it never prevents a command from running. (Hook-recorded failures
+  // carry no alternative, so they warn-only; the always-on built-in rules, which
+  // always include an alternative, remain the source of hard blocks.)
+  if (!hasKnownAlternative(pattern)) return false;
 
   const daysSinceFirst = daysBetween(new Date(pattern.firstSeen), now);
 

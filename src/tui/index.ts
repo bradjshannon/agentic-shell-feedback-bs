@@ -204,14 +204,13 @@ const MENU_ITEMS = [
       "traces to promote/expire patterns.",
       "",
       "Promotion (advisory → blocking):",
-      "  ≥ 2 failures in 30 days",
-      "  OR ≥ 60 seconds wasted",
+      "  (≥ 2 mechanical failures in 30 days",
+      "   OR ≥ 60s wasted) AND a known fix",
       "",
-      "Expiration (→ expired):",
-      "  No occurrence in 90 days",
+      "Without a known alternative a pattern",
+      "stays advisory and only warns.",
       "",
-      "The Stop hook runs this automatically",
-      "at the end of each session.",
+      "Expiration: no occurrence in 90 days.",
     ],
   },
   {
@@ -697,16 +696,16 @@ function renderLearn(state: State): void {
 
   const lines = [
     "",
-    `  Evaluates all recorded traces and promotes patterns that`,
-    `  have crossed the blocking threshold:`,
+    `  Evaluates recorded traces and promotes a pattern to`,
+    `  blocking only when both conditions hold:`,
     "",
-    `    ${A.cyan}≥ 2 failures in 30 days${A.reset}   OR   ${A.cyan}≥ 60 seconds wasted${A.reset}`,
+    `    ${A.cyan}≥ 2 mechanical failures in 30 days  OR  ≥ 60s wasted${A.reset}`,
+    `    ${A.cyan}AND a known alternative to suggest${A.reset}`,
     "",
+    `  Without a known fix, a pattern stays advisory (warns only).`,
     `  Patterns not seen in 90 days are expired.`,
     "",
     `  ${A.dim}This runs automatically via the Stop hook at session end.${A.reset}`,
-    "",
-    "",
   ];
 
   for (let r = 0; r < bodyRows; r++) {

@@ -51,6 +51,31 @@ describe("FailureRegistry", () => {
     expect(data.patterns).toHaveLength(0);
   });
 
+  it("does not create a pattern for semantic failures (plain non-zero exit)", async () => {
+    const store = new MemoryStore();
+    const registry = new FailureRegistry(store);
+    // A test that failed / grep with no match / experiment that didn't pan out:
+    // recorded as a trace, but must never seed a learnable pattern.
+    await registry.record(makeTrace({ outcome: "semantic-failure", duration_ms: 2000 }));
+
+    const data = await store.load();
+    expect(data.patterns).toHaveLength(0);
+    expect(data.traces).toHaveLength(1);
+  });
+
+  it("does not strengthen an existing pattern on a semantic failure", async () => {
+    const store = new MemoryStore();
+    const registry = new FailureRegistry(store);
+    await registry.record(makeTrace()); // mechanical timeout → pattern, occ=1
+    await registry.record(
+      makeTrace({ id: "t2", outcome: "semantic-failure", timestamp: "2026-06-02T00:00:00Z" }),
+    );
+
+    const data = await store.load();
+    expect(data.patterns).toHaveLength(1);
+    expect(data.patterns[0]?.occurrences).toBe(1);
+  });
+
   it("does not strengthen an existing pattern on a successful run", async () => {
     const store = new MemoryStore();
     const registry = new FailureRegistry(store);

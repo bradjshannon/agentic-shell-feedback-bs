@@ -34,7 +34,7 @@ export class LearningLoop {
     this.gate = new PreflightGate({
       enableBuiltInRules: this.cfg.enableBuiltInRules,
       customRules: this.cfg.customRules,
-      blockOnConfidence: this.cfg.blockOnConfidence,
+      minMatchScore: this.cfg.minMatchScore,
     });
 
     this.policy = new PolicyEngine(this.cfg.storage, {
@@ -61,7 +61,9 @@ export class LearningLoop {
    * Check a pre-built CommandContext (e.g., when you've already analyzed the command).
    */
   async preflightContext(context: CommandContext): Promise<PreflightResult> {
-    const matches = await this.registry.findMatching(context, this.cfg.blockOnConfidence);
+    // Surface fuzzy (advisory) matches down to minMatchScore, but always include
+    // exact matches (score 1.0) so the gate can hard-block them.
+    const matches = await this.registry.findMatching(context, this.cfg.minMatchScore);
     return this.gate.check(context, matches);
   }
 

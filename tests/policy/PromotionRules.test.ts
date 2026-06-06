@@ -64,6 +64,19 @@ describe("shouldPromote", () => {
     expect(shouldPromote(p, now, { ...DEFAULT_THRESHOLDS, occurrences: 10 })).toBe(false);
     expect(shouldPromote(p, now, { ...DEFAULT_THRESHOLDS, occurrences: 5 })).toBe(true);
   });
+
+  it("does not promote without a known alternative, even past threshold", () => {
+    // No concrete fix to suggest → stay advisory (warn-only), never hard-block.
+    expect(shouldPromote(makePattern({ occurrences: 5, successfulAlternative: "unknown" }), now)).toBe(false);
+    expect(shouldPromote(makePattern({ occurrences: 5, successfulAlternative: "" }), now)).toBe(false);
+    expect(shouldPromote(makePattern({ wasted_ms: 120_000, successfulAlternative: "unknown" }), now)).toBe(false);
+  });
+
+  it("promotes once a known alternative is present", () => {
+    expect(
+      shouldPromote(makePattern({ occurrences: 2, successfulAlternative: "stdin piping" }), now),
+    ).toBe(true);
+  });
 });
 
 describe("shouldExpire", () => {

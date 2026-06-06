@@ -135,20 +135,31 @@ describe("PreflightGate", () => {
   });
 
   describe("registry-based blocking", () => {
-    it("blocks when blocking pattern matches with high score", () => {
+    it("blocks when a blocking pattern matches exactly", () => {
       const gate = new PreflightGate({ enableBuiltInRules: false });
-      const pattern = makeScoredPattern({ status: "blocking" }, 0.9);
+      const pattern = makeScoredPattern({ status: "blocking" }, 1.0);
       const result = gate.check(makeContext(), [pattern]);
       expect(result.allowed).toBe(false);
       expect(result.matchedPattern).toBeDefined();
       expect(result.requiredAlternative).toBe("stdin piping");
     });
 
-    it("allows when blocking pattern has low confidence score", () => {
-      const gate = new PreflightGate({ enableBuiltInRules: false, blockOnConfidence: 0.8 });
+    it("warns (not blocks) for a blocking pattern matched only fuzzily", () => {
+      // A sibling command shape (score < 1.0) must never hard-block — the
+      // command still runs, but we surface the related known-bad pattern.
+      const gate = new PreflightGate({ enableBuiltInRules: false });
+      const pattern = makeScoredPattern({ status: "blocking" }, 0.9);
+      const result = gate.check(makeContext(), [pattern]);
+      expect(result.allowed).toBe(true);
+      expect(result.warnings.length).toBeGreaterThan(0);
+    });
+
+    it("allows when a pattern matches below the advisory threshold", () => {
+      const gate = new PreflightGate({ enableBuiltInRules: false, minMatchScore: 0.8 });
       const pattern = makeScoredPattern({ status: "blocking" }, 0.5);
       const result = gate.check(makeContext(), [pattern]);
       expect(result.allowed).toBe(true);
+      expect(result.warnings).toHaveLength(0);
     });
 
     it("warns (not blocks) for advisory pattern with high score", () => {
@@ -163,6 +174,7 @@ describe("PreflightGate", () => {
       const gate = new PreflightGate({ enableBuiltInRules: false });
       const pattern = makeScoredPattern({ status: "expired" }, 1.0);
       const result = gate.check(makeContext(), [pattern]);
+      // Expired patterns shouldn't reach the gate, but if one does it must not block.
       expect(result.allowed).toBe(true);
     });
   });

@@ -41,6 +41,18 @@ describe("Full learning loop integration", () => {
       timestamp: new Date(Date.now() + 1000).toISOString(),
     });
 
+    // Agent discovers the working alternative — recorded so the system has a
+    // concrete fix to suggest. (A pattern is only promoted to blocking when it
+    // can tell the agent what to do instead.)
+    await loop.record({
+      command: problematicCommand,
+      context: loop.analyze(problematicCommand, hints),
+      outcome: "success",
+      duration_ms: 1_000,
+      alternativeUsed: "stdin piping: echo 'script' | ssh user@host bash",
+      timestamp: new Date(Date.now() + 2000).toISOString(),
+    });
+
     // Run policy engine
     const learned = await loop.learn();
     expect(learned.promoted).toBeGreaterThanOrEqual(1);
@@ -93,6 +105,8 @@ describe("Full learning loop integration", () => {
 
     await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 30_000 });
     await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 30_000, timestamp: new Date(Date.now() + 1000).toISOString() });
+    // A known alternative is required before a pattern can be promoted to blocking.
+    await loop.record({ command: cmd, context: ctx, outcome: "success", duration_ms: 1_000, alternativeUsed: "stdin piping", timestamp: new Date(Date.now() + 2000).toISOString() });
 
     const result = await loop.learn();
     expect(result.promoted).toBeGreaterThanOrEqual(1);
