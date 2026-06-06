@@ -29,10 +29,16 @@ export class FailureRegistry {
     const existing = data.patterns.find((p) => p.signature === sig && p.status !== "expired");
 
     if (existing) {
-      existing.occurrences += 1;
-      existing.lastSeen = trace.timestamp;
-      existing.wasted_ms += trace.outcome === "timeout" ? trace.duration_ms : 0;
-      existing.confidence = computeConfidence(existing.occurrences);
+      // A successful run must never strengthen a failure pattern: doing so would
+      // inflate occurrences/confidence (and refresh lastSeen, preventing expiry)
+      // off the back of commands that actually worked, risking false promotion to
+      // blocking. We still capture a working alternative when one is reported.
+      if (trace.outcome !== "success") {
+        existing.occurrences += 1;
+        existing.lastSeen = trace.timestamp;
+        existing.wasted_ms += trace.outcome === "timeout" ? trace.duration_ms : 0;
+        existing.confidence = computeConfidence(existing.occurrences);
+      }
       if (trace.alternativeUsed) {
         existing.successfulAlternative = trace.alternativeUsed;
       }

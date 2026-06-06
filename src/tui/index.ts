@@ -1040,7 +1040,8 @@ function handleKey(key: string, state: State): State | "quit" | "async" {
     }
 
     case "patterns": {
-      if (key === KEY.esc || key === KEY.b) return { ...state, screen: "menu", output: [], status: "idle" };
+      // Only Esc goes back here — `b` is reserved for toggling pattern status below.
+      if (key === KEY.esc) return { ...state, screen: "menu", output: [], status: "idle" };
       if (key === KEY.up) return { ...state, patternIdx: clamp(state.patternIdx - 1, 0, Math.max(0, state.patternsData.length - 1)) };
       if (key === KEY.down) return { ...state, patternIdx: clamp(state.patternIdx + 1, 0, Math.max(0, state.patternsData.length - 1)) };
       if (key === KEY.d) {

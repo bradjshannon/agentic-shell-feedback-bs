@@ -51,6 +51,37 @@ describe("FailureRegistry", () => {
     expect(data.patterns).toHaveLength(0);
   });
 
+  it("does not strengthen an existing pattern on a successful run", async () => {
+    const store = new MemoryStore();
+    const registry = new FailureRegistry(store);
+    // One genuine failure creates the advisory pattern.
+    await registry.record(makeTrace());
+    // A later success with the same (coarse) signature must not inflate it,
+    // otherwise normal working commands could promote a pattern to blocking.
+    await registry.record(
+      makeTrace({ id: "t2", outcome: "success", duration_ms: 5000, timestamp: "2026-06-02T00:00:00Z" }),
+    );
+
+    const data = await store.load();
+    expect(data.patterns).toHaveLength(1);
+    expect(data.patterns[0]?.occurrences).toBe(1);
+    expect(data.patterns[0]?.wasted_ms).toBe(30000);
+    expect(data.patterns[0]?.lastSeen).toBe("2026-06-01T10:00:00Z");
+  });
+
+  it("captures a working alternative from a successful run without strengthening", async () => {
+    const store = new MemoryStore();
+    const registry = new FailureRegistry(store);
+    await registry.record(makeTrace());
+    await registry.record(
+      makeTrace({ id: "t2", outcome: "success", alternativeUsed: "stdin piping", timestamp: "2026-06-02T00:00:00Z" }),
+    );
+
+    const data = await store.load();
+    expect(data.patterns[0]?.occurrences).toBe(1);
+    expect(data.patterns[0]?.successfulAlternative).toBe("stdin piping");
+  });
+
   it("upserts existing pattern on duplicate signature", async () => {
     const store = new MemoryStore();
     const registry = new FailureRegistry(store);

@@ -9,7 +9,7 @@
 
 ## Phase 1 — Foundation
 
-- [x] `package.json` + `tsconfig.json` + `jest.config.ts`
+- [x] `package.json` + `tsconfig.json` + `jest.config.js`
 - [x] `src/types.ts` — all core interfaces
 - [x] `src/config.ts` — config loading with defaults
 - [x] `src/storage/MemoryStore.ts` + tests
@@ -39,9 +39,11 @@
 ## Phase 5 — Polish
 
 - [x] `README.md`
-- [ ] Performance: pattern index
+- [x] Team export/import (CLI + TUI, dedup by signature)
+- [x] Interactive TUI + multi-agent installer
+- [ ] Performance: pattern index (still a linear scan in `PatternMatcher`;
+      fine at `maxPatterns` ≤ 500, revisit if that grows)
 - [ ] JSDoc completion
-- [ ] Team export/import validation
 
 ---
 
@@ -51,6 +53,7 @@
 |-----|------|------|------|-------|
 | 1   | 2026-06-04 | 0 | 0 | Initial scaffold |
 | 2   | 2026-06-04 | 78 | 0 | Full suite green |
+| 3   | 2026-06-06 | 223 | 0 | Adds gate/policy/broker/eval/installer/TUI suites |
 
 ---
 
