@@ -42,13 +42,6 @@ describe("PolicyEngine", () => {
       expect(data.patterns[0]?.status).toBe("blocking");
     });
 
-    it("promotes advisory patterns meeting wasted_ms threshold", async () => {
-      const store = storeWithPatterns([makePattern({ wasted_ms: 70_000 })]);
-      const engine = new PolicyEngine(store);
-      const result = await engine.evaluate();
-      expect(result.promoted).toHaveLength(1);
-    });
-
     it("does not promote patterns below threshold", async () => {
       const store = storeWithPatterns([makePattern({ occurrences: 1, wasted_ms: 0 })]);
       const engine = new PolicyEngine(store);

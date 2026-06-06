@@ -137,7 +137,6 @@ export interface LearningLoopConfig {
   // Policy thresholds
   promotionOccurrences?: number;
   promotionWindowDays?: number;
-  promotionWastedMs?: number;
   expirationDays?: number;
 
   // Gate behavior
@@ -160,7 +159,6 @@ export interface ResolvedConfig {
   maxPatterns: number;
   promotionOccurrences: number;
   promotionWindowDays: number;
-  promotionWastedMs: number;
   expirationDays: number;
   enableBuiltInRules: boolean;
   customRules: GateRule[];

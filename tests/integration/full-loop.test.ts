@@ -13,7 +13,6 @@ describe("Full learning loop integration", () => {
       storage: store,
       promotionOccurrences: 2,
       promotionWindowDays: 30,
-      promotionWastedMs: 60_000,
     });
 
     const problematicCommand = "ssh user@prod << 'EOF'\necho 'deploying'\nEOF";
@@ -92,24 +91,24 @@ describe("Full learning loop integration", () => {
     await loop.close();
   });
 
-  it("accumulates wasted_ms and triggers early promotion", async () => {
+  it("does not promote on wasted time alone — recurrence is the only trigger", async () => {
     const store = new MemoryStore();
     const loop = new LearningLoop({
       storage: store,
       promotionOccurrences: 10, // high — won't fire by count
-      promotionWastedMs: 50_000, // will fire after ~2 large timeouts
     });
 
     const cmd = "ssh host << 'HEREDOC'\nscript\nHEREDOC";
     const ctx = loop.analyze(cmd, { shell: "bash", target: "remote-ssh" });
 
-    await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 30_000 });
-    await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 30_000, timestamp: new Date(Date.now() + 1000).toISOString() });
-    // A known alternative is required before a pattern can be promoted to blocking.
+    // Two large timeouts (lots of wasted time) plus a known alternative — but
+    // still under the occurrence threshold. Wasted time must not promote it.
+    await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 300_000 });
+    await loop.record({ command: cmd, context: ctx, outcome: "timeout", duration_ms: 300_000, timestamp: new Date(Date.now() + 1000).toISOString() });
     await loop.record({ command: cmd, context: ctx, outcome: "success", duration_ms: 1_000, alternativeUsed: "stdin piping", timestamp: new Date(Date.now() + 2000).toISOString() });
 
     const result = await loop.learn();
-    expect(result.promoted).toBeGreaterThanOrEqual(1);
+    expect(result.promoted).toBe(0);
     await loop.close();
   });
 

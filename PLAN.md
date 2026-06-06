@@ -113,9 +113,10 @@ REPEATED_TIMEOUT_SHAPE  — same command shape that timed out previously → DEN
 
 **`PromotionRules`**: pure functions over `FailurePattern`:
 - `shouldPromote(pattern, now)`: advisory **and** has a known alternative, **and**
-  (`occurrences >= 2 AND daysSinceFirst <= 30` OR `wasted_ms >= 60_000`) → promote to blocking.
-  The known-alternative requirement is the core "light touch" guard: without a fix to suggest a
-  pattern stays advisory (warn-only) and never prevents a command from running.
+  `occurrences >= 2 AND daysSinceFirst <= 30` → promote to blocking. The known-alternative
+  requirement is the core "light touch" guard: without a fix to suggest a pattern stays advisory
+  (warn-only) and never prevents a command from running. (Recurrence is the only trigger —
+  wasted-time was dropped because command duration can't be measured reliably via agent hooks.)
 - `shouldExpire(pattern, now)`: `status == advisory AND daysSinceLastSeen >= 90` → expire.
   (Blocking patterns never auto-expire.)
 
@@ -223,7 +224,6 @@ interface LearningLoopConfig {
   // Policy thresholds
   promotionOccurrences?: number;      // default: 2
   promotionWindowDays?: number;       // default: 30
-  promotionWastedMs?: number;         // default: 60_000
   expirationDays?: number;            // default: 90
 
   // Gate behavior
@@ -251,7 +251,7 @@ interface LearningLoopConfig {
 | `CommandAnalyzer` | detect powershell, detect SSH, detect heredoc, detect multiline, detect complex quotes |
 | `BuiltInRules` | POWERSHELL_SSH_HEREDOC fires, COMPLEX_INLINE_SSH fires at threshold, clean command passes |
 | `PreflightGate` | allows clean, blocks built-in match, blocks registry match (blocking), warns advisory |
-| `PromotionRules` | promotes at threshold occurrences, promotes on wasted time, no promote under threshold, expires after window |
+| `PromotionRules` | promotes at threshold occurrences (with known alternative), no promote under threshold, no promote without alternative, expires after window |
 | `PolicyEngine` | promotes matching, expires stale, skips already-blocking, persists changes |
 | `TransportBroker` | selects inline for simple, stdin for medium, file for complex/multiline |
 | `EvalRunner` | computes metrics correctly, detects regression |

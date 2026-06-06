@@ -39,18 +39,14 @@ describe("shouldPromote", () => {
     expect(shouldPromote(p, now)).toBe(false);
   });
 
-  it("promotes immediately when wasted_ms exceeds threshold", () => {
-    const p = makePattern({ occurrences: 1, wasted_ms: 60_001 });
-    expect(shouldPromote(p, now)).toBe(true);
-  });
-
-  it("promotes exactly at wasted_ms threshold", () => {
-    const p = makePattern({ occurrences: 1, wasted_ms: DEFAULT_THRESHOLDS.wastedMs });
-    expect(shouldPromote(p, now)).toBe(true);
+  it("does not promote on wasted time alone (under occurrence threshold)", () => {
+    // Wasted-time is no longer a promotion trigger — recurrence is the only one.
+    const p = makePattern({ occurrences: 1, wasted_ms: 600_000 });
+    expect(shouldPromote(p, now)).toBe(false);
   });
 
   it("does not promote a blocking pattern", () => {
-    const p = makePattern({ status: "blocking", occurrences: 5, wasted_ms: 100_000 });
+    const p = makePattern({ status: "blocking", occurrences: 5 });
     expect(shouldPromote(p, now)).toBe(false);
   });
 
@@ -69,7 +65,6 @@ describe("shouldPromote", () => {
     // No concrete fix to suggest → stay advisory (warn-only), never hard-block.
     expect(shouldPromote(makePattern({ occurrences: 5, successfulAlternative: "unknown" }), now)).toBe(false);
     expect(shouldPromote(makePattern({ occurrences: 5, successfulAlternative: "" }), now)).toBe(false);
-    expect(shouldPromote(makePattern({ wasted_ms: 120_000, successfulAlternative: "unknown" }), now)).toBe(false);
   });
 
   it("promotes once a known alternative is present", () => {

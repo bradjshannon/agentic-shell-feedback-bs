@@ -3,14 +3,12 @@ import type { FailurePattern } from "../types.js";
 export interface PromotionThresholds {
   occurrences: number;
   windowDays: number;
-  wastedMs: number;
   expirationDays: number;
 }
 
 export const DEFAULT_THRESHOLDS: PromotionThresholds = {
   occurrences: 2,
   windowDays: 30,
-  wastedMs: 60_000,
   expirationDays: 90,
 };
 
@@ -40,14 +38,11 @@ export function shouldPromote(
   // always include an alternative, remain the source of hard blocks.)
   if (!hasKnownAlternative(pattern)) return false;
 
+  // Recurrence is the sole trigger: the same mechanical failure seen enough
+  // times within the window. (Wasted-time was dropped — command duration can't
+  // be measured reliably through the agent hook interfaces.)
   const daysSinceFirst = daysBetween(new Date(pattern.firstSeen), now);
-
-  const meetsOccurrenceThreshold =
-    pattern.occurrences >= thresholds.occurrences && daysSinceFirst <= thresholds.windowDays;
-
-  const meetsWastedTimeThreshold = pattern.wasted_ms >= thresholds.wastedMs;
-
-  return meetsOccurrenceThreshold || meetsWastedTimeThreshold;
+  return pattern.occurrences >= thresholds.occurrences && daysSinceFirst <= thresholds.windowDays;
 }
 
 /**

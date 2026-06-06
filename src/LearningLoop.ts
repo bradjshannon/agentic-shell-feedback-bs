@@ -40,7 +40,6 @@ export class LearningLoop {
     this.policy = new PolicyEngine(this.cfg.storage, {
       occurrences: this.cfg.promotionOccurrences,
       windowDays: this.cfg.promotionWindowDays,
-      wastedMs: this.cfg.promotionWastedMs,
       expirationDays: this.cfg.expirationDays,
     });
 

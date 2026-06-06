@@ -13,7 +13,7 @@ This tool gives them that memory. Every time an AI assistant runs a shell comman
 The rules:
 
 - It only learns from **mechanical failures** — a command that couldn't run as intended (not found, not executable, timed out). A command that simply returns an error (a failing test, a `grep` with no match, an experiment that didn't pan out) is **never** learned from, so it won't block the commands you're iterating on.
-- A mechanical failure that **recurs** (twice within 30 days, or wastes 60+ seconds) becomes a tracked pattern.
+- A mechanical failure that **recurs** (twice within 30 days) becomes a tracked pattern.
 - A tracked pattern is only ever **hard-blocked once it also knows the working alternative** to suggest. Until then it just *warns* — the command still runs.
 - A handful of **built-in rules** block the most common transport mistakes (e.g. PowerShell + SSH + heredoc) immediately, always with the fix.
 - A pattern not seen for **90 days** is forgotten.
@@ -119,7 +119,7 @@ record(trace)
      wasted_ms, updates confidence; captures a working alternative if reported.
 
 learn()
-  └─ PolicyEngine: advisory → blocking when (seen ≥ 2× in 30 days OR ≥ 60s wasted)
+  └─ PolicyEngine: advisory → blocking when seen ≥ 2× in 30 days
                    AND a known alternative exists to suggest
                    advisory → expired when not seen in 90 days
 
@@ -169,10 +169,10 @@ await loop.close();
 ```typescript
 const loop = new LearningLoop({
   storageDir: "/path/to/custom/dir",
-  promotionOccurrences: 2,       // failures before blocking (default: 2)
+  promotionOccurrences: 2,       // mechanical failures before blocking (default: 2)
   promotionWindowDays: 30,        // window for counting failures (default: 30)
-  promotionWastedMs: 60_000,      // wasted time threshold (default: 60s)
   expirationDays: 90,             // days inactive before expiry (default: 90)
+  minMatchScore: 0.7,             // min similarity to raise an advisory warning
   enableBuiltInRules: false,      // disable built-in rules
   customRules: [ /* ... */ ],
 });
